@@ -20,7 +20,8 @@ trees[trees$CLASS_DESC=='Manufacturing/Industrial' & !is.na(trees$CLASS_DESC),'i
 trees[trees$CLASS_DESC!='Manufacturing/Industrial' | is.na(trees$CLASS_DESC),'industrial'] <- 0
 #Compute tree density and plot % white people vs. density
 setDT(trees)[,treekm2:=length(UNITID)*1000000/ALAND10, .(GEOID10)]
-ggplot(trees, aes(x=DP0080003/DP0080001, y=treekm2)) + geom_point()
+trees$percwhite <- with(trees, DP0080003/DP0080001)
+ggplot(trees, aes(x=percwhite, y=treekm2)) + geom_point()
 #
 treesel <- trees[grepl('^Acer platanoides.+', trees$SCIENTIFIC) | trees$SCIENTIFIC=='Acer macrophyllum',]
 treesel$SCIENTIFIC_simple <- treesel$SCIENTIFIC
@@ -49,11 +50,21 @@ ggplot() +
   scale_x_log10() + 
   theme_classic()
 
+#Congestion
+
+#% white-only people
+ggplot() +
+  geom_histogram(data=treesel,aes(x=percwhite, fill=SCIENTIFIC_simple), bins=100, alpha=1/2, position='identity')+
+  scale_y_sqrt(expand=c(0,0)) + 
+  scale_x_log10() + 
+  theme_classic()
+
+
 #######################################################################################
 #Create sampling design
-#For AADT
+#For speed limit
 treesel$Value <- treesel$heat_spdlm
-treespdlm_bins <- bin_rastertab(treesel, nbins=100, tukey=T, rep=100, rastertab=F)
+treespdlm_bins <- bin_rastertab(treesel, nbins=20, tukey=T, rep=100, rastertab=F)
 ggplot() +
   geom_rect(data=treespdlm_bins, aes(xmin=binmin, xmax=binmax, ymin=0, ymax=count/100),fill='lightgrey')+
   scale_y_sqrt(expand=c(0,0)) + 
@@ -63,10 +74,20 @@ treesel$spdlm_bin <- .bincode(treesel$heat_spdlm, breaks=c(min(treesel$heat_spdl
 
 #For AADT
 treesel$Value <- treesel$heat_AADT
-treeaadt_bins <- bin_rastertab(treesel, nbins=100, tukey=T, rep=100, rastertab=F)
+treeaadt_bins <- bin_rastertab(treesel, nbins=20, tukey=T, rep=100, rastertab=F)
 treesel$aadt_bin <- .bincode(treesel$heat_AADT, breaks=c(min(treesel$heat_AADT),treeaadt_bins$binmax))
 
 ggplot(treesel, aes(x=aadt_bin, y=spdlm_bin)) + geom_point()
+
+#For congestion
+
+#For % white-only people
+treesel$Value <-treesel$percwhite
+treewhite_bins <- bin_rastertab(treesel, nbins=20, tukey=T, rep=100, rastertab=F)
+treesel$white_bin <- .bincode(treesel$percwhite, breaks=c(min(treesel$percwhite),treewhite_bins$binmax))
+
+#For zoning
+length(which(treesel$industrial==1))
 
 
 
