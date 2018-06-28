@@ -31,23 +31,19 @@ treesel[grepl('^Acer platanoides.+', treesel$SCIENTIFIC), 'SCIENTIFIC_simple'] <
 ########################################################################################################################
 #Speed limit
 spdlm$Value <- spdlm$Value+1
-spdlm_hist <- bin_rastertab(spdlm, 50, tukey=T, rep=10)
-setDT(spdlm_hist)[,binmin:=shift(binsback, 1, type='lag'),]
-spdlm_hist[1,'binmin'] <- min(spdlm$Value)
+spdlm_hist <- bin_rastertab(spdlm, 50, tukey=T, rep=100, rastertab=T)
 ggplot() +
-  geom_rect(data=spdlm_hist, aes(xmin=binmin, xmax=binsback, ymin=0, ymax=count/100),fill='lightgrey')+
+  geom_rect(data=spdlm_hist, aes(xmin=binmin, xmax=binmax, ymin=0, ymax=count/100),fill='lightgrey')+
   geom_histogram(data=treesel,aes(x=heat_spdlm, fill=SCIENTIFIC_simple), bins=100, alpha=1/2, position='identity')+
   scale_y_sqrt(expand=c(0,0)) + 
-  scale_x_log10() + 
+  scale_x_log10(breaks=c(1,10,100,1000,10000)) + 
   theme_classic()
 
 #AADT with logarithmic bins
 aadt$Value <- aadt$Value+1
-aadt_hist <- bin_rastertab(aadt, 50, tukey=T, rep=10)
-setDT(aadt_hist)[,binmin:=shift(binsback, 1, type='lag'),]
-aadt_hist[1,'binmin'] <- min(aadt$Value)
+aadt_hist <- bin_rastertab(aadt, 50, tukey=T, rep=100, rastertab=T)
 ggplot() +
-  geom_rect(data=aadt_hist, aes(xmin=binmin, xmax=binsback, ymin=0, ymax=count/100),fill='lightgrey')+
+  geom_rect(data=aadt_hist, aes(xmin=binmin, xmax=binmax, ymin=0, ymax=count/100),fill='lightgrey')+
   geom_histogram(data=treesel,aes(x=heat_AADT, fill=SCIENTIFIC_simple), bins=100, alpha=1/2, position='identity')+
   scale_y_sqrt(expand=c(0,0)) + 
   scale_x_log10() + 
@@ -55,11 +51,22 @@ ggplot() +
 
 #######################################################################################
 #Create sampling design
+#For AADT
+treesel$Value <- treesel$heat_spdlm
+treespdlm_bins <- bin_rastertab(treesel, nbins=100, tukey=T, rep=100, rastertab=F)
+ggplot() +
+  geom_rect(data=treespdlm_bins, aes(xmin=binmin, xmax=binmax, ymin=0, ymax=count/100),fill='lightgrey')+
+  scale_y_sqrt(expand=c(0,0)) + 
+  scale_x_log10() + 
+  theme_classic()
+treesel$spdlm_bin <- .bincode(treesel$heat_spdlm, breaks=c(min(treesel$heat_spdlm),treespdlm_bins$binmax))
 
-bin_rastertab(aadt, 50, tukey=T, rep=10)
+#For AADT
+treesel$Value <- treesel$heat_AADT
+treeaadt_bins <- bin_rastertab(treesel, nbins=100, tukey=T, rep=100, rastertab=F)
+treesel$aadt_bin <- .bincode(treesel$heat_AADT, breaks=c(min(treesel$heat_AADT),treeaadt_bins$binmax))
 
-
-
+ggplot(treesel, aes(x=aadt_bin, y=spdlm_bin)) + geom_point()
 
 
 
