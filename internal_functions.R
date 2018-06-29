@@ -46,14 +46,6 @@ getlambda <- function(x, start = -2, end = 2, int = 0.025, verbose = FALSE, stat
   if (verbose == TRUE) {
     print(df)
   }
-  if (plotit == TRUE) {
-    if (statistic == 1) {
-      plot(lambda, W, col = "black")
-    }
-    if (statistic == 2) {
-      plot(lambda, A, col = "blue")
-    }
-  }
   if (statistic == 1) {
     df2 = df[with(df, order(-W)), ]
   }
@@ -142,6 +134,6 @@ bin_rastertab<- function(tab, nbins, tukey=T, rep=10, rastertab) {
     df_hist <- setDT(df)[,length(Value), .(bin)]
   }
   colnames(df_hist) <- c('id','count')
-  df_hist <- merge(df_hist, binback, by='id')
-  return(df_hist)
+  df_hist <- merge(df_hist, binback, by='id', all.x=T, all.y=T)
+  return(df_hist[-1,])
 }
