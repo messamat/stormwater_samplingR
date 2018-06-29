@@ -61,34 +61,41 @@ ggplot() +
 
 
 #######################################################################################
+AM <- trees[trees$SCIENTIFIC=='Acer macrophyllum',]
 #Create sampling design
 #For speed limit
-treesel$Value <- treesel$heat_spdlm
-treespdlm_bins <- bin_rastertab(treesel, nbins=20, tukey=T, rep=100, rastertab=F)
+AM$Value <- AM$heat_spdlm
+treespdlm_bins <- bin_rastertab(AM, nbins=20, tukey=T, rep=100, rastertab=F)
 ggplot() +
   geom_rect(data=treespdlm_bins, aes(xmin=binmin, xmax=binmax, ymin=0, ymax=count/100),fill='lightgrey')+
   scale_y_sqrt(expand=c(0,0)) + 
   scale_x_log10() + 
   theme_classic()
-treesel$spdlm_bin <- .bincode(treesel$heat_spdlm, breaks=c(min(treesel$heat_spdlm),treespdlm_bins$binmax))
+AM$spdlm_bin <- .bincode(AM$heat_spdlm, breaks=c(min(AM$heat_spdlm)-1,
+                                                 treespdlm_bins$binmax[1:(nrow(treespdlm_bins)-1)],
+                                                 max(treespdlm_bins$binmax)+1), right=T, include.lowest = T)
 
 #For AADT
-treesel$Value <- treesel$heat_AADT
-treeaadt_bins <- bin_rastertab(treesel, nbins=20, tukey=T, rep=100, rastertab=F)
-treesel$aadt_bin <- .bincode(treesel$heat_AADT, breaks=c(min(treesel$heat_AADT),treeaadt_bins$binmax))
+AM$Value <- AM$heat_AADT
+treeaadt_bins <- bin_rastertab(AM, nbins=20, tukey=T, rep=100, rastertab=F)
+AM$aadt_bin <- .bincode(AM$heat_AADT, breaks=c(min(AM$heat_AADT)-1,
+                                                 treeaadt_bins$binmax[1:(nrow(treeaadt_bins)-1)],
+                                                 max(treeaadt_bins$binmax)+1), right=F, include.lowest = T)
 
-ggplot(treesel, aes(x=aadt_bin, y=spdlm_bin)) + geom_point()
+ggplot(AM, aes(x=aadt_bin, y=spdlm_bin, color=factor(industrial))) + geom_jitter() + geom_point(color='black',size=3)
 
 #For congestion
 
 #For % white-only people
-treesel$Value <-treesel$percwhite
-treewhite_bins <- bin_rastertab(treesel, nbins=20, tukey=T, rep=100, rastertab=F)
-treesel$white_bin <- .bincode(treesel$percwhite, breaks=c(min(treesel$percwhite),treewhite_bins$binmax))
+AM$Value <-AM$percwhite
+treewhite_bins <- bin_rastertab(AM, nbins=5, tukey=T, rep=100, rastertab=F)
+AM$white_bin <- .bincode(AM$percwhite, breaks=c(min(AM$percwhite)-1,
+                                               treewhite_bins$binmax[1:(nrow(treewhite_bins)-1)],
+                                               max(treewhite_bins$binmax)+1), right=T, include.lowest = T)
+ggplot(AM, aes(x=aadt_bin, y=spdlm_bin, color=factor(white_bin))) + geom_jitter() + geom_point(color='black',size=3)
 
 #For zoning
-length(which(treesel$industrial==1))
-
+length(which(AM$industrial==1))
 
 
 #######################################################################################
@@ -110,7 +117,7 @@ ggplot(streets[!(streets$ARTDESCRIP %in% c('County Arterial', NA)),], aes(x=ARTD
   geom_boxplot() +
   theme_classic()
 
-#Arterial classification  only slightly discriminate among speed limits
+#Arterial classification moderately discriminates among AADT levels
 ggplot(streets[!(streets$ARTDESCRIP %in% c('County Arterial', NA)),], aes(x=ARTDESCRIP, y=AADT_inter, fill=ARTDESCRIP)) + 
   geom_boxplot() + 
   scale_y_log10() + 
