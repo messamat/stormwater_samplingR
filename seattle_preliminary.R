@@ -6,9 +6,10 @@ setwd("C:/Mathis/ICSL/stormwater/src/stormwater_samplingR")
 source('internal_functions.R')
 
 setwd("C:/Mathis/ICSL/stormwater/results/")
-trees <- read.dbf('trees_tab.dbf') #Traffic values for Big Leaf Maple
+trees <- read.dbf('trees_tab.dbf') #Traffic values for Seattle street trees
 aadt <- read.dbf('heat_aadt.dbf') #Raster attribute table for Average Annual Daily Traffic heat map (AADT)
 spdlm <- read.dbf('heat_spdlm.dbf') #Raster attribute table for speed limit heat map
+bing <- read.dbf('heat_bing.dbf')
 streets <- read.dbf('Seattle_roads.dbf')
 
 ########################################################################################################################
@@ -37,8 +38,10 @@ ggplot() +
   geom_rect(data=spdlm_hist, aes(xmin=binmin, xmax=binmax, ymin=0, ymax=count/100),fill='lightgrey')+
   geom_histogram(data=treesel,aes(x=heat_spdlm, fill=SCIENTIFIC_simple), bins=100, alpha=1/2, position='identity')+
   scale_y_sqrt(expand=c(0,0)) + 
-  scale_x_log10(breaks=c(1,10,100,1000,10000)) + 
-  theme_classic()
+  scale_x_log10(name='Speed limit heat value',breaks=c(1,10,100,1000,10000)) + 
+  guides(fill=guide_legend(title="Tree species")) + 
+  theme_classic() + 
+  theme(legend.position=c(0.20,0.8))
 
 #AADT with logarithmic bins
 aadt$Value <- aadt$Value+1
@@ -47,10 +50,25 @@ ggplot() +
   geom_rect(data=aadt_hist, aes(xmin=binmin, xmax=binmax, ymin=0, ymax=count/100),fill='lightgrey')+
   geom_histogram(data=treesel,aes(x=heat_AADT, fill=SCIENTIFIC_simple), bins=100, alpha=1/2, position='identity')+
   scale_y_sqrt(expand=c(0,0)) + 
-  scale_x_log10() + 
-  theme_classic()
+  scale_x_log10(name='AADT heat value') + 
+  guides(fill=guide_legend(title="Tree species")) + 
+  theme_classic() + 
+  theme(legend.position=c(0.20,0.8))
 
 #Congestion
+#AADT with logarithmic bins
+bing$Value <- bing$Value+1
+bing_hist <- bin_rastertab(bing, 100, tukey=T, rep=100, rastertab=T)
+ggplot() +
+  geom_rect(data=bing_hist, aes(xmin=binmin, xmax=binmax, ymin=0, ymax=count/10000),fill='lightgrey',size=3)+
+  #geom_histogram(data=bing,aes(x=Value), bins=100, alpha=1/2, position='identity')+
+  geom_histogram(data=treesel,aes(x=heat_bing_, fill=SCIENTIFIC_simple), bins=100, alpha=1/2, position='identity')+
+  scale_y_sqrt(expand=c(0,0)) + 
+  scale_x_sqrt(name='bing heat value') + 
+  guides(fill=guide_legend(title="Tree species")) + 
+  theme_classic() + 
+  theme(legend.position=c(0.20,0.8))
+
 
 #% white-only people
 ggplot() +
@@ -82,9 +100,18 @@ AM$aadt_bin <- .bincode(AM$heat_AADT, breaks=c(min(AM$heat_AADT)-1,
                                                  treeaadt_bins$binmax[1:(nrow(treeaadt_bins)-1)],
                                                  max(treeaadt_bins$binmax)+1), right=F, include.lowest = T)
 
-ggplot(AM, aes(x=aadt_bin, y=spdlm_bin, color=factor(industrial))) + geom_jitter() + geom_point(color='black',size=3)
+ggplot(AM, aes(x=aadt_bin, y=spdlm_bin, color=factor(industrial))) + geom_jitter() + geom_point(color='black',size=3) +
+  labs(x='AADT bin', y='Speed limit bin')
 
 #For congestion
+AM$Value <- AM$heat_bing_
+treebing_bins <- bin_rastertab(AM, nbins=20, tukey=T, rep=100, rastertab=F)
+AM$bing_bin <- .bincode(AM$heat_bing_, breaks=c(min(AM$heat_bing_-1),
+                                               treebing_bins$binmax[1:(nrow(treebing_bins)-1)],
+                                                 max(treebing_bins$binmax)+1), right=F, include.lowest = T)
+
+ggplot(AM, aes(x=bing_bin, y=aadt_bin, color=factor(industrial))) + geom_jitter() + geom_point(color='black',size=3) +
+  labs(x='Congestion bin', y='AADT bin')
 
 #For % white-only people
 AM$Value <-AM$percwhite
