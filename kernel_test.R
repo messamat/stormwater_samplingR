@@ -37,16 +37,17 @@ weightedkernel(reclassmlc, 100, 'power',p=2, outkernel='F:/Levin_Lab/stormwater/
 
 
 
-# #Curve illustrations
+#Curve illustrations
+# library(ggplot2)
 # dist=100
 # p <- 2
 # x <- seq(-dist,dist)
 # #Power
 # pow <- 1/p
 # y <- 1-((abs(x)^pow)/(dist^pow))
-# qplot(x,y)
+# qplot(x,y) + labs(x='Distance (meters)', y='Value') + theme_bw()
 # #Logarithm
-# y <- 1-(log2(abs(x)+1))/(log2(dist+1))
-# qplot(x,y)
+# y <- 1-(log2(abs(x)+1))/(log2(dist+1)) 
+# qplot(x,y) + labs(x='Distance (meters)', y='Value') + theme_bw()
 # #
 
