@@ -1,16 +1,25 @@
 library(ggplot2)
 library(data.table)
 library(foreign)
+library(sp)
+library(plyr)
+library(openxlsx)
 
-setwd("C:/Mathis/ICSL/stormwater/src/stormwater_samplingR")
+rootdir = "C:/Mathis/ICSL/stormwater"
+setwd(file.path(rootdir, "src/stormwater_samplingR"))
 source('internal_functions.R')
 
-setwd("C:/Mathis/ICSL/stormwater/results/")
+setwd(file.path(rootdir,"results"))
 trees <- read.dbf('trees_tab.dbf') #Traffic values for Seattle street trees
 aadt <- read.dbf('heat_aadt.dbf') #Raster attribute table for Average Annual Daily Traffic heat map (AADT)
 spdlm <- read.dbf('heat_spdlm.dbf') #Raster attribute table for speed limit heat map
 bing <- read.dbf('heat_bing.dbf')
 streets <- read.dbf('Seattle_roads.dbf')
+
+#Sampled trees
+fielddata <- read.xlsx(file.path(rootdir,"data/field_data/field_data_raw_20180730_edit.xlsx"), sheet=1,startRow=1, detectDates=T)
+#Create Tree.ID.resampling to have the nearest tree when actually sampled tree was not in Seattle database
+fielddatasel <- fielddata[fielddata$Include == 'Y' & !is.na(fielddata$Tree.ID.resampling),] #Ignore trees in parks
 
 ########################################################################################################################
 # Format data
@@ -23,10 +32,14 @@ trees[trees$CLASS_DESC!='Manufacturing/Industrial' | is.na(trees$CLASS_DESC),'in
 setDT(trees)[,treekm2:=length(UNITID)*1000000/ALAND10, .(GEOID10)]
 trees$percwhite <- with(trees, DP0080003/DP0080001)
 ggplot(trees, aes(x=percwhite, y=treekm2)) + geom_point()
-#
-treesel <- as.data.frame(trees[grepl('^Acer platanoides.+', trees$SCIENTIFIC) | trees$SCIENTIFIC=='Acer macrophyllum',])
+
+
+#Select either Norway or Big Leaf Maple, though no hybrid norway maple, and include all already-sampled trees
+treesel <- as.data.frame(trees[(grepl('^Acer platanoides.+', trees$SCIENTIFIC)& !grepl('^.+x.+',  trees$SCIENTIFIC)) |
+                                 trees$SCIENTIFIC == 'Acer macrophyllum' | 
+                                 trees$UNITID %in% fielddatasel,])
 treesel$SCIENTIFIC_simple <- treesel$SCIENTIFIC
-treesel[grepl('^Acer platanoides.+', treesel$SCIENTIFIC), 'SCIENTIFIC_simple'] <- 'Acer platanoides' 
+treesel[treesel$UNITID %in% fielddatasel$Tree.ID.resampling,'sampled'] <- 'Y'
 
 ########################################################################################################################
 # Analyze distribution of traffic values for trees vs. whole city
@@ -97,12 +110,12 @@ treesel$spdlm_bin <- .bincode(treesel$heat_spdlm, breaks=c(min(treesel$heat_spdl
 
 #For AADT
 treesel$Value <- treesel$heat_AADT 
-treeaadt_bins <- bin_rastertab(treesel, nbins=10, tukey=T, rep=100, rastertab=F) #Create power-scaled bins based on AADT heat value distribution of trees
-treesel$aadt_bin <- .bincode(treesel$heat_AADT, breaks=c(min(treesel$heat_AADT)-1,
-                                                 treeaadt_bins$binmax[1:(nrow(treeaadt_bins)-1)],
-                                                 max(treeaadt_bins$binmax)+1), right=F, include.lowest = T)
+treeAADT_bins <- bin_rastertab(treesel, nbins=10, tukey=T, rep=100, rastertab=F) #Create power-scaled bins based on AADT heat value distribution of trees
+treesel$AADT_bin <- .bincode(treesel$heat_AADT, breaks=c(min(treesel$heat_AADT)-1,
+                                                 treeAADT_bins$binmax[1:(nrow(treeAADT_bins)-1)],
+                                                 max(treeAADT_bins$binmax)+1), right=F, include.lowest = T)
 
-ggplot(treesel, aes(x=aadt_bin, y=spdlm_bin, color=factor(industrial))) + geom_jitter() + geom_point(color='black',size=3) +
+ggplot(treesel, aes(x=AADT_bin, y=spdlm_bin, color=factor(industrial))) + geom_jitter() + geom_point(color='black',size=3) +
   labs(x='AADT bin', y='Speed limit bin')
 
 #For congestion
@@ -112,7 +125,7 @@ treesel$bing_bin <- .bincode(treesel$heat_bing_, breaks=c(min(treesel$heat_bing_
                                                treebing_bins$binmax[1:(nrow(treebing_bins)-1)],
                                                  max(treebing_bins$binmax)+1), right=F, include.lowest = T)
 
-ggplot(treesel, aes(x=bing_bin, y=aadt_bin, color=factor(spdlm_bin))) + geom_jitter() + geom_point(color='black',size=3) +
+ggplot(treesel, aes(x=bing_bin, y=AADT_bin, color=factor(spdlm_bin))) + geom_jitter() + geom_point(color='black',size=3) +
   labs(x='Congestion bin', y='AADT bin')
 
 #For % white-only people
@@ -121,50 +134,114 @@ ggplot(treesel, aes(x=bing_bin, y=aadt_bin, color=factor(spdlm_bin))) + geom_jit
 # treesel$white_bin <- .bincode(treesel$percwhite, breaks=c(min(treesel$percwhite)-1,
 #                                                treewhite_bins$binmax[1:(nrow(treewhite_bins)-1)],
 #                                                max(treewhite_bins$binmax)+1), right=T, include.lowest = T)
-# ggplot(treesel, aes(x=aadt_bin, y=spdlm_bin, color=factor(white_bin))) + geom_jitter() + geom_point(color='black',size=3)
+# ggplot(treesel, aes(x=AADT_bin, y=spdlm_bin, color=factor(white_bin))) + geom_jitter() + geom_point(color='black',size=3)
 # 
 # #For zoning
 # length(which(treesel$industrial==1))
-##############################################################################################
-#Devise multivariate sampling procedure
-treeselcopy <- treesel
 
-nrow(unique(treesel[,c('aadt_bin', 'spdlm_bin', 'bing_bin')])) #Number of unique variable bin combinations
 
-#Get three trees with lowest and highest aadt, speed limit, and congestion heat value. 
+###################################################### Devise multivariate sampling procedure #################################################
+
+#Make 'sampled colum'
+#Make sure that no tree will be sampled in the same bin or within 100 m from that tree
+treesel <- as.data.frame(treesel)
+# Compute pairwise distances between all trees, and for each tree, find its closest neighboring tree
+coordmatrix <- as.matrix(treesel[,c('SHAPE_LNG','SHAPE_LAT')])
+dist <- as.data.frame(spDists(x = coordmatrix, y = coordmatrix, longlat = T, segments = FALSE, diagonal = FALSE)) #Compute pairwise distance among all trees
+colnames(dist) <- as.character(treesel$UNITID)
+dist$UNITID <- as.character(treesel$UNITID)
+distmelt <-melt(setDT(dist), id.vars='UNITID', variable.name='UNITID.y', value.name = 'dist')
+closest <- distmelt[UNITID!=UNITID.y, .SD[which.min(dist)], by = UNITID] #Find closest neighboring tree
+treesel <- merge(treesel, closest, by='UNITID') #Merge with main tree dataset
+
+
+#Create unique bin combination ID
+ntotal = 40-length(unique(fielddatasel$`#`)) #Total number of trees to sample
+binvars = c('AADT_bin', 'spdlm_bin', 'bing_bin')
+treesel$bincomb <- adply(as.data.frame(treesel[,binvars]),1, function(x) paste(x, collapse=""))[,'V1'] #Compute ID for each unique combination of bins
+
+############### Get three trees with lowest and highest aadt, speed limit, and congestion heat value. 
 ID='UNITID'
 n=3
+maxdist = 0.1
+set.seed(2)
+
+distmelt_lim <- as.data.frame(distmelt[distmelt$dist<maxdist,])
 treesel[,ID] <- as.character(treesel[,ID])
 treesel$tosample <- NA
+sampledID <- fielddata$Tree.ID.resampling
+treesel$heat_bing <- treesel$heat_bing_
 #For each variable
-for (var in c('heat_AADT','heat_spdlm','heat_bing_')) {
+for (var in c('heat_AADT','heat_spdlm','heat_bing')) {
   print(var)
+  #For min value
   mintreeID <- NULL
-  i=n
+  i=n-nrow(treesel[!(is.na(treesel$tosample) & is.na(treesel$sampled)) & treesel[,paste(substr(var, 6, 15),'bin',sep='_')] %in% c(1,2),])
   while (i > 0){
     mintrees <- treesel[(treesel[,var] %in% 
-                           min(treesel[!(treesel[,ID] %in% mintreeID),var])),] #Get all trees with minimum variable value that is above that of the trees already sampled
-    samplesize <- ifelse(nrow(mintrees)<=i,nrow(mintrees),i) #Determine sample size, as the minimum of [number of trees with desired value, remaining number of trees to sample]
-    mintreeID[(n-i+1):(n-i+samplesize)] <- sample(x=as.character(mintrees[,ID]), size=1, replace=F) #Get ID of random sample of trees with desired value
-    i=i-samplesize #Adjust remaining number of trees to sample
+                           min(treesel[!(treesel[,ID] %in% sampledID),var])),] #Get all trees with minimum variable value that is above that of the trees already sampled
+    mintrees_sel <- mintrees[!(mintrees$UNITID %in% #Only keep trees that are not within the min distance of already selected trees
+                                 as.character(distmelt_lim[distmelt_lim$UNITID %in% sampledID,'UNITID.y'])),] 
+    if (nrow(mintrees_sel)==0) {
+      sampledID <- c(sampledID, mintrees) #Trees already sampled
+    } else {
+      #samplesize <- ifelse(nrow(mintrees)<=i,nrow(mintrees),i) #Determine sample size, as the minimum of [number of trees with desired value, remaining number of trees to sample]
+      samplesize <- 1
+      mintreeID[n-i+samplesize] <- sample(x=as.character(mintrees_sel[,ID]), size=samplesize, replace=F) #Get ID of random sample of trees with desired value
+      sampledID <- c(sampledID, mintreeID[(n-i+samplesize)])
+      i=i-samplesize #Adjust remaining number of trees to sample
+    }
   }
   treesel[treesel[,ID] %in% mintreeID & !is.na(treesel$tosample),'tosample'] <-  paste0(treesel[treesel[,ID] %in% mintreeID & !is.na(treesel$tosample),'tosample'], 'min',var,'_')
   treesel[treesel[,ID] %in% mintreeID & is.na(treesel$tosample),'tosample'] <-  paste0('min',var,'_')
-  
+
   #Same for max value
   maxtreeID <- NULL
-  i=n
+  i=n-nrow(treesel[!(is.na(treesel$tosample) & is.na(treesel$sampled)) & treesel[,paste(substr(var, 6, 15),'bin',sep='_')] == 10,])
   while (i > 0){
     maxtrees <- treesel[(treesel[,var] %in% 
-                           max(treesel[!(treesel[,ID] %in% maxtreeID),var])),] #Get all trees with maximum variable value that is above that of the trees already sampled
-    samplesize <- ifelse(nrow(maxtrees)<=i,nrow(maxtrees),i) #Determine sample size, as the minimum of [number of trees with desired value, remaining number of trees to sample]
-    maxtreeID[(n-i+1):(n-i+samplesize)] <- sample(x=as.character(maxtrees[,ID]), size=1, replace=F) #Get ID of random sample of trees with desired value
-    i=i-samplesize #Adjust remaining number of trees to sample
+                           max(treesel[!(treesel[,ID] %in% sampledID),var])),] #Get all trees with maximum variable value that is above that of the trees already sampled
+    maxtrees_sel <- maxtrees[!(maxtrees$UNITID %in% #Only keep trees that are not within the max distance of already selected trees
+                                 as.character(distmelt_lim[distmelt_lim$UNITID %in% sampledID,'UNITID.y'])),] 
+    if (nrow(maxtrees_sel)==0) {
+      sampledID <- c(sampledID, maxtrees) #Trees already sampled
+    } else {
+      #samplesize <- ifelse(nrow(maxtrees)<=i,nrow(maxtrees),i) #Determaxe sample size, as the maximum of [number of trees with desired value, remaining number of trees to sample]
+      samplesize <- 1
+      maxtreeID[n-i+samplesize] <- sample(x=as.character(maxtrees_sel[,ID]), size=samplesize, replace=F) #Get ID of random sample of trees with desired value
+      sampledID <- c(sampledID, maxtreeID[(n-i+samplesize)])
+      i=i-samplesize #Adjust remaining number of trees to sample
+    }
   }
   treesel[treesel[,ID] %in% maxtreeID & !is.na(treesel$tosample),'tosample'] <-  paste0(treesel[treesel[,ID] %in% maxtreeID & !is.na(treesel$tosample),'tosample'], 'max',var,'_')
   treesel[treesel[,ID] %in% maxtreeID & is.na(treesel$tosample),'tosample'] <-  paste0('max',var,'_')
 }
 
+############### Randomly sample which bin to sample from and randomply sample within that bin ###############
+nrest = 40 -(nrow(treesel[!is.na(treesel$tosample),])+length(unique(fielddatasel$`#`))) #Remaining number of trees to sample after picking the min and max ones
+binunique <- unique(treesel$bincomb)[!(unique(treesel$bincomb) %in% unique(treesel[!(is.na(treesel$tosample) & is.na(treesel$sampled)),'bincomb']))] #Unique variable bin combinations not already sampled
+binsample <- sample(binunique, nrest, replace=F) # Randomly draw which bins will be sampled
+
+for (b in binsample) { #For each bin to sample
+  print(b)
+  sampledID <- NULL
+  while (is.null(sampledID)) { 
+    sampledID <- sample(treesel[treesel$bincomb==b & !(treesel$UNITID %in% fielddatasel$Tree.ID.resampling),'UNITID'], 1,replace=F) #Sample one tree
+    treesu100 <- as.character(distmelt_lim[distmelt_lim$UNITID %in% treesel[!(is.na(treesel$tosample) & is.na(treesel$sampled)),'UNITID'], 'UNITID.y']) #List of trees within 100-m of already-sampled trees
+    if (sampledID %in% treesu100) sampledID <- NULL  #Make sure that it's not within maxdist of any other sampled tree
+    #Otherwise, re-sample within that bin
+  }
+  treesel[treesel$UNITID==sampledID,'tosample'] <- 'random'
+}
+
+#Check distribution of sampled trees
+ggplot(treesel, aes(x=bing_bin, y=AADT_bin, color=factor(spdlm_bin))) + 
+  geom_jitter()  +
+  labs(x='Congestion bin', y='AADT bin') + 
+  geom_point(data=treesel[!(is.na(treesel$tosample) & is.na(treesel$sampled)),], color='black',size=3)
+
+save.image(paste0('random_sampling', Sys.Date()))
+write.csv(treesel[!is.na(treesel$tosample),], 'preliminary_tree_sample_20180730.csv', row.names=F)
 
 #######################################################################################
 # Analyze how functional class relates to AADT and Speed limit
