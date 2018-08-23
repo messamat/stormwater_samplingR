@@ -4,34 +4,44 @@ resdir <- file.path(rootdir,'results')
 bindir <- file.path(rootdir,'bin')
 cloudcaldir <- file.path(bindir,'CloudCal/')
 
-source(file.path(cloudcaldir,'global.R'))
+gitrep <- "https://github.com/leedrake5/CloudCal"
+system(paste("cd", bindir))
+system(paste("git clone", gitrep))
+system("cd CloudCal")
+system("git status")
 
-#From CloudCal
-k.lines <- read.csv(file=file.path(cloudcaldir, "data/K Line-Table 1.csv"), sep=",")
-l.lines <- read.csv(file=file.path(cloudcaldir,"data/L Line-Table 1.csv"), sep=",")
-fluorescence.lines <- read.csv(file.path(cloudcaldir,"data/FluorescenceLines.csv"))
+#First download github repository to bin folder
+setwd(cloudcaldir)
+source(file.path(cloudcaldir,'global.R'))
+setwd(resdir)
+
 
 #Read PDZ files
+filepath <- file.path(datadir,'XRF20180808/Original/ANALYZE_EMP-12.pdz')
+filename <- 'ANALYZE_EMP-12.pdz'
+
+#Redefine readPDZ24Data to correct for integer
 readPDZ24Data<- function(filepath, filename){
   
   filename <- gsub(".pdz", "", filename)
-  filename.vector <- rep(filename, 2020)
+  filename.vector <- rep(filename, 2048)
   
-  nbrOfRecords <- 2020
+  nbrOfRecords <- 2048
   integers <- readPDZ24(filepath, start=357, size=nbrOfRecords)
+  try <- data.frame(integers)
   sequence <- seq(1, length(integers), 1)
   
-  time.est <- integers[21]
+  time.est <- integers[18] #Used to be 21
   
   channels <- sequence
   energy <- sequence*.02
-  counts <- integers/(integers[21]/10)
+  counts <- integers/(integers[18]) #Used to be integers[21]/10
   
   data.frame(Energy=energy, CPS=counts, Spectrum=filename.vector)
   
 }
-filepath <- file.path(datadir,'XRF20180808/Postcalibration/ANALYZE_EMP-47.pdz')
-filename <- 'ANALYZE_EMP-47.pdz'
 
+
+spec12 <- readPDZData(filepath,filename)
 
 
