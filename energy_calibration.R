@@ -48,7 +48,7 @@ readPDZ24Data<- function(filepath, filename, evch=0.02){
   nbrOfRecords <- 2048
   integers <- readPDZ24(filepath, start=357, size=nbrOfRecords)
   try <- data.frame(integers)
-  sequence <- seq(1, length(integers), 1)
+  sequence <- seq(0, length(integers)-1, 1) #Used to be seq(1, length(integers), 1)
   
   #time.est <- integers[21] commented out from LD version
   
@@ -72,7 +72,7 @@ findpeak <- function(spec, elem, siegb,range) {
 
 #Given a spectrum and data frame of elements, find peaks and output data frame
 #with a row with the theoretical emitted energy and corresponding channel number for each element transition 
-energycal <- function(spec, df) {
+energycaldat <- function(spec, df) {
   #Get transition energy and channel number corresponding to each transition in spectrum
   adply(df, 1, function(x) {
     c(chpeak = findpeak(spec,x[,'elem'], x[,'siegb'], x[,'rsearch']),
@@ -80,12 +80,11 @@ energycal <- function(spec, df) {
     })
 }
 
-
 #Compute evch and plot calibration curve and spectra
-modplotcal <- function(spec, df, filepath, filename) {
+modplotcal <- function(spec, df, filepath, filename, outdir=NULL) {
   #Run linear regression
-  evch_cor <- lm(evpeak~chpeak, data=caldf)
-  evch_mod <- list(a = as.character(format(coef(evch_cor)[1], digits = 2)),
+  evch_cor <- lm(evpeak~chpeak, data=df)
+  evch_mod <- list(a = as.character(format(coef(evch_cor)[1], digits = 4)),
                    b = as.character(format(coef(evch_cor)[2], digits = 3)), 
                    r2 = as.character(format(summary(evch_cor)$r.squared, digits = 4)))
   eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2,evch_mod)
@@ -94,52 +93,86 @@ modplotcal <- function(spec, df, filepath, filename) {
   speccor <- readPDZ24Data(filepath, filename, evch=evch_cor$coefficients[2])
   
   #Plot calibration regression
-  calibrationplot <- ggplotGrob(ggplot(caldf, aes(x=chpeak, y=evpeak)) +
+  calibrationplot <- ggplotGrob(ggplot(df, aes(x=chpeak, y=evpeak)) +
     geom_point(size=2)+
     geom_smooth(method='lm')+
-    geom_text(x = min(caldf$chpeak)+diff(range(caldf$chpeak))/3, y =max(caldf$evpeak*0.8), label = eq_exp, parse = TRUE) +
-    geom_text(aes(label=elem),hjust=0, vjust=0)+
+    geom_text(x = min(df$chpeak)+diff(range(df$chpeak))/3, y =max(df$evpeak*0.8), label = eq_exp, parse = TRUE) +
+    geom_text(aes(label=elem),hjust=0.1, vjust=0)+
     labs(x='Channel number', y="Observed peak's energy")+
     theme_classic())
+  
   #Plot recalibrated spectrum
   spectraplot <- ggplot(speccor, aes(x=Energy, y=CPS))+
-    geom_line(size=1.4) +
+    geom_line(size=1.3) +
     geom_line(data=spec, color='grey') + 
-    geom_vline(xintercept=caldf$evpeak, color='red') +
-    annotate('text',label=caldf$elem, x=caldf$evpeak+0.1, y=0.8*max(speccor$CPS), color='darkred')+ 
+    geom_vline(xintercept=df$evpeak, color='red') +
+    scale_x_continuous(name='Energy (Kev)', expand=c(0,0))+
+    scale_y_continuous(name='Pulses', expand=c(0,0))+
+    annotate('text',label=df$elem, x=df$evpeak+0.1, y=0.8*max(speccor$CPS), color='darkred')+ 
     annotation_custom(grob = calibrationplot, xmin = 30, xmax = max(spec$Energy), ymin = 0.5*max(spec$CPS), ymax = max(spec$CPS)) +
     theme_bw()
   
-  print(spectraplot)
+  if (is.null(outdir)){
+    print(spectraplot)
+  } else{
+    png(file.path(outdir,paste0(substr(filename,1,nchar(filepath)-4),'_plot.png')),width=16, height=8, units='in',res=300)
+    print(spectraplot)
+    dev.off()
+  }
   
   return(evch_cor)
 }
 
 #Write spectrum to ARTAX-compatible .txt with updated evch
-writecal <- function(spec, evch_cor, filepath) {
+writecal <- function(spec, evch_cor, filename, outdir) {
   txtheader <- c("BeginHeader", "Elin=20 Eabs=0", "Fano=0.11 FWHM=150", "EndHeader")
-  txtheader[2] <- paste0("Elin=",evch_cor$coefficients[2],' Eabs=0')
-  outpath <- paste0(substr(filepath,1,nchar(filepath)-4),'_edit.txt')
-  warning(paste('Writing calibrated spectrum to', outpath))
+  txtheader[2] <- paste0("Elin=",evch_cor$coefficients[2],' Eabs=',evch_cor$coefficients[1])
+  outpath <- file.path(outdir, paste0(substr(filename,1,nchar(filename)-4),'_edit.txt'))
+  warning(paste('Writing calibrated spectrum to', outpath),immediate.=T)
   writeLines(c(txtheader, spec$CPS), outpath)
 }
 
+#Run calibration over all .pdz files in a directory
+batchcal <- function(dirpath) {
+  
+  #Get all .pdz files in directory
+  speclist  <- list.files(dirpath, pattern='\\.pdz$')
+  
+  #Directory to write energy calibrated spectra to
+  txt_outdir <- file.path(dirpath, paste0('ecalibrated_',format(Sys.time(),'%Y%m%d')))
+  if (!file.exists(txt_outdir)){
+    warning(paste('Create directory:',txt_outdir),immediate.=T)
+    dir.create(txt_outdir)
+  }
+  
+  #Run workflow for each spectrum
+  for (i in 1:length(speclist)) {
+    pdz_filepath <- file.path(dirpath, speclist[i])
+    pdz_filename <- speclist[i]
+    spec <- readPDZ24Data(pdz_filepath,pdz_filename) #Read
+    caldfext <- energycaldat(spec, caldf) #Get data for calibration
+    evch_mod <- modplotcal(spec, caldfext, pdz_filepath, pdz_filename, txt_outdir) 
+    writecal(spec, evch_cor, pdz_filename, txt_outdir)
+  }
+}
 
 ##----------------------------------------------
-#Run
+#Run  for all spectra
+
 #DF of elements and energy transitions to use in calibration
-caldf <- data.frame(elem = as.character(c('Fe','Fe','Cu','Zn','Sr','Rh','Pd')),
-                    siegb = as.character(c('Ka1','Kb1','Ka1','Ka1','Ka1','Ka1','Ka1')),
-                    rsearch=c(0.4,0.3,0.3,0.3,1,0.6,1),
+caldf <- data.frame(elem = as.character(c('Fe','Fe','Cu','Zn','Sr','Pd')),
+                    siegb = as.character(c('Ka1','Kb1','Ka1','Ka1','Ka1','Ka1')),
+                    rsearch=c(0.4,0.3,0.3,0.3,1,1),
                     stringsAsFactors=FALSE)
 
-num=12
-pdz_filepath <- file.path(datadir,paste0('XRF20180808/Original/ANALYZE_EMP-',num,'.pdz'))
-pdz_filename <- paste0('ANALYZE_EMP-',num,'.pdz')
-spec <- readPDZ24Data(pdz_filepath,pdz_filename)
+#Directory to get spectra from
+batchcal(file.path(datadir,paste0('XRF20180808/Original_20180718')))
+batchcal(file.path(datadir,paste0('XRF20180808/PostBrukerCalibration')))
 
-caldf <- energycal(spec, caldf)
-evch_mod <- modplotcal(spec, caldf, pdz_filepath, pdz_filename)
-writecal(spec, evch_cor, pdz_filepath)
+
+
+
+
+
 
 
