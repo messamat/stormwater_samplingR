@@ -2,6 +2,10 @@
 #Only works for Tracer III SD data (PDZ v24 file format)
 library(plyr)
 library(ggplot2)
+library(gridExtra)
+
+#To do: 
+#Install packrat and snapshot package configuration
 
 ##----------------------------------------------
 #Define directory structure
@@ -35,7 +39,7 @@ if (!file.exists(globalR)) {
 ##----------------------------------------------
 #Read PDZ files
 
-#Redefine readPDZ24Data to correct for integer scaling issue
+#Redefine CloudCal's readPDZ24Data to correct for integer scaling issue
 readPDZ24Data<- function(filepath, filename, evch=0.02){
   
   filename <- gsub(".pdz", "", filename)
@@ -46,24 +50,14 @@ readPDZ24Data<- function(filepath, filename, evch=0.02){
   try <- data.frame(integers)
   sequence <- seq(1, length(integers), 1)
   
-  time.est <- integers[11] #Used to be 21
+  #time.est <- integers[21] commented out from LD version
   
   channels <- sequence
   energy <- sequence*evch
-  counts <- integers/(integers[11]) #Used to be integers[21]/10
+  counts <- integers/min(integers[integers>0]) #Used to be integers/(integers[21]/10)
   
   data.frame(Channels=channels, Energy=energy, CPS=counts, Spectrum=filename.vector) #Added channels
-  
 }
-filepath=file.path(datadir,'XRF20180808/Original/ANALYZE_EMP-18.pdz')
-filename <- 'ANALYZE_EMP-18.pdz'
-spec18 <- readPDZ24Data(file.path(datadir,'XRF20180808/Original/ANALYZE_EMP-18.pdz'),'ANALYZE_EMP-18.pdz')
-
-
-ggplot(spec18, aes(x=Energy, y=CPS))+
-  geom_line() +
-  geom_vline(xintercept=c(Fe.lines[['Ka1']],Fe.lines[['Kb1']], Zn.lines[['Ka1']],Pd.lines[['Ka1']],Rh.lines[['Ka1']]), color='red') +
-  theme_bw()
 
 ##----------------------------------------------
 #Recalibrate
@@ -86,35 +80,66 @@ energycal <- function(spec, df) {
     })
 }
 
+
+#Compute evch and plot calibration curve and spectra
+modplotcal <- function(spec, df, filepath, filename) {
+  #Run linear regression
+  evch_cor <- lm(evpeak~chpeak, data=caldf)
+  evch_mod <- list(a = as.character(format(coef(evch_cor)[1], digits = 2)),
+                   b = as.character(format(coef(evch_cor)[2], digits = 3)), 
+                   r2 = as.character(format(summary(evch_cor)$r.squared, digits = 4)))
+  eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2,evch_mod)
+  eq_exp <- as.character(as.expression(eq))
+  
+  speccor <- readPDZ24Data(filepath, filename, evch=evch_cor$coefficients[2])
+  
+  #Plot calibration regression
+  calibrationplot <- ggplotGrob(ggplot(caldf, aes(x=chpeak, y=evpeak)) +
+    geom_point(size=2)+
+    geom_smooth(method='lm')+
+    geom_text(x = min(caldf$chpeak)+diff(range(caldf$chpeak))/3, y =max(caldf$evpeak*0.8), label = eq_exp, parse = TRUE) +
+    geom_text(aes(label=elem),hjust=0, vjust=0)+
+    labs(x='Channel number', y="Observed peak's energy")+
+    theme_classic())
+  #Plot recalibrated spectrum
+  spectraplot <- ggplot(speccor, aes(x=Energy, y=CPS))+
+    geom_line(size=1.4) +
+    geom_line(data=spec, color='grey') + 
+    geom_vline(xintercept=caldf$evpeak, color='red') +
+    annotate('text',label=caldf$elem, x=caldf$evpeak+0.1, y=0.8*max(speccor$CPS), color='darkred')+ 
+    annotation_custom(grob = calibrationplot, xmin = 30, xmax = max(spec$Energy), ymin = 0.5*max(spec$CPS), ymax = max(spec$CPS)) +
+    theme_bw()
+  
+  print(spectraplot)
+  
+  return(evch_cor)
+}
+
+#Write spectrum to ARTAX-compatible .txt with updated evch
+writecal <- function(spec, evch_cor, filepath) {
+  txtheader <- c("BeginHeader", "Elin=20 Eabs=0", "Fano=0.11 FWHM=150", "EndHeader")
+  txtheader[2] <- paste0("Elin=",evch_cor$coefficients[2],' Eabs=0')
+  outpath <- paste0(substr(filepath,1,nchar(filepath)-4),'_edit.txt')
+  warning(paste('Writing calibrated spectrum to', outpath))
+  writeLines(c(txtheader, spec$CPS), outpath)
+}
+
+
+##----------------------------------------------
+#Run
 #DF of elements and energy transitions to use in calibration
-caldf <- data.frame(elem = as.character(c('Fe','Fe','Cu','Zn','Pd','Rh')), 
-                    siegb = as.character(c('Ka1','Kb1','Ka1','Ka1','Ka1','Ka1')), 
-                    rsearch=c(0.4,0.3,0.3,0.3,1,0.6),
+caldf <- data.frame(elem = as.character(c('Fe','Fe','Cu','Zn','Sr','Rh','Pd')),
+                    siegb = as.character(c('Ka1','Kb1','Ka1','Ka1','Ka1','Ka1','Ka1')),
+                    rsearch=c(0.4,0.3,0.3,0.3,1,0.6,1),
                     stringsAsFactors=FALSE)
-#Get theoretical transition energies and empirical energy levels
-caldf <- energycal(spec18, caldf)
-#Run linear regression
-evch_cor <- lm(evpeak~chpeak, data=caldf)
-eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2,
-                 list(a = format(coef(evch_cor)[1], digits = 2),
-                      b = format(coef(evch_cor)[2], digits = 4), 
-                      r2 = format(summary(evch_cor)$r.squared, digits = 4)))
-eq_exp <- as.character(as.expression(eq))
 
-spec18cor <- readPDZ24Data(file.path(datadir,'XRF20180808/Original/ANALYZE_EMP-18.pdz'),'ANALYZE_EMP-18.pdz', evch=evch_cor$coefficients[2])
+num=12
+pdz_filepath <- file.path(datadir,paste0('XRF20180808/Original/ANALYZE_EMP-',num,'.pdz'))
+pdz_filename <- paste0('ANALYZE_EMP-',num,'.pdz')
+spec <- readPDZ24Data(pdz_filepath,pdz_filename)
 
-#Plot calibration regression
-calibrationplot <- ggplot(caldf, aes(x=chpeak, y=evpeak)) +
-  geom_point(size=2)+
-  geom_smooth(method='lm')+
-  geom_text(x = min(caldf$chpeak)+diff(range(caldf$chpeak))/4, y =max(caldf$evpeak*0.8), label = eq_exp, parse = TRUE) +
-  theme_classic()
-#Plot recalibrated spectrum
-spectraplot <- ggplot(spec18cor, aes(x=Energy, y=CPS))+
-  geom_line() +
-  geom_line(data=spec18, color='lightgrey') + 
-  geom_vline(xintercept=caldf$evpeak, color='red') +
-  annotate('text',label=caldf$elem, x=caldf$evpeak+0.1, y=1500, color='darkred')+ 
-  theme_bw()
+caldf <- energycal(spec, caldf)
+evch_mod <- modplotcal(spec, caldf, pdz_filepath, pdz_filename)
+writecal(spec, evch_cor, pdz_filepath)
 
-png()
+
