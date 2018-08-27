@@ -30,7 +30,7 @@ if (!file.exists(globalR)) {
   options(digits=8)
   options(warn=0)
 } else {
-  warning("CloudCal already exists",immediate.=T)
+  warning("CloudCal package is already installed.",immediate.=T)
 }
 
 #Run cloudcal locally
@@ -43,11 +43,10 @@ if (!file.exists(globalR)) {
 readPDZ24Data<- function(filepath, filename, evch=0.02){
   
   filename <- gsub(".pdz", "", filename)
-  filename.vector <- rep(filename, 2048)
+  nbrOfRecords <- 2048 #Number of channels 
+  filename.vector <- rep(filename, nbrOfRecords)
   
-  nbrOfRecords <- 2048
   integers <- readPDZ24(filepath, start=357, size=nbrOfRecords)
-  try <- data.frame(integers)
   sequence <- seq(0, length(integers)-1, 1) #Used to be seq(1, length(integers), 1)
   
   #time.est <- integers[21] commented out from LD version
@@ -102,7 +101,7 @@ modplotcal <- function(spec, df, filepath, filename, outdir=NULL) {
     theme_classic())
   
   #Plot recalibrated spectrum
-  spectraplot <- ggplot(speccor, aes(x=Energy, y=CPS))+
+  spectraplot <- ggplot(speccor, aes(x=Energy-evch_cor$coefficients[1], y=CPS))+
     geom_line(size=1.3) +
     geom_line(data=spec, color='grey') + 
     geom_vline(xintercept=df$evpeak, color='red') +
@@ -133,7 +132,7 @@ writecal <- function(spec, evch_cor, filename, outdir) {
 }
 
 #Run calibration over all .pdz files in a directory
-batchcal <- function(dirpath) {
+batchcal <- function(dirpath, df) {
   
   #Get all .pdz files in directory
   speclist  <- list.files(dirpath, pattern='\\.pdz$')
@@ -150,7 +149,7 @@ batchcal <- function(dirpath) {
     pdz_filepath <- file.path(dirpath, speclist[i])
     pdz_filename <- speclist[i]
     spec <- readPDZ24Data(pdz_filepath,pdz_filename) #Read
-    caldfext <- energycaldat(spec, caldf) #Get data for calibration
+    caldfext <- energycaldat(spec, df) #Get data for calibration
     evch_mod <- modplotcal(spec, caldfext, pdz_filepath, pdz_filename, txt_outdir) 
     writecal(spec, evch_cor, pdz_filename, txt_outdir)
   }
@@ -164,10 +163,72 @@ caldf <- data.frame(elem = as.character(c('Fe','Fe','Cu','Zn','Sr','Pd')),
                     siegb = as.character(c('Ka1','Kb1','Ka1','Ka1','Ka1','Ka1')),
                     rsearch=c(0.4,0.3,0.3,0.3,1,1),
                     stringsAsFactors=FALSE)
-
 #Directory to get spectra from
-batchcal(file.path(datadir,paste0('XRF20180808/Original_20180718')))
-batchcal(file.path(datadir,paste0('XRF20180808/PostBrukerCalibration')))
+batchcal(file.path(datadir,paste0('XRF20180808/Original_20180718')), caldf)
+batchcal(file.path(datadir,paste0('XRF20180808/PostBrukerCalibration')), caldf)
+
+
+#-------------------------------------------------
+#Test method on duplex
+duplexcaldf <- data.frame(elem = as.character(c('Cr','Fe','Fe','Mo')),
+                    siegb = as.character(c('Ka1','Ka1','Ka1','Ka1')),
+                    rsearch=c(0.5,0.5,0.5,0.5),
+                    stringsAsFactors=FALSE)
+
+batchcal(file.path(datadir,paste0('XRF20180808/Duplextests')), duplexcaldf)
+
+#Import and format results
+duplexspecdir <- file.path(datadir, 'XRF20180808\\Duplextests\\csv')
+duplexresdir <- file.path(datadir, 'XRF20180808\\Duplextests\\results')
+
+resfilepathvec <- file.path(duplexresdir,
+                            c('duplex_test_20180816_120sec_result.csv',
+                              'duplex_test_20180821_2_120sec_result.csv',
+                              'duplex_test_20180821_120sec_result.csv',
+                              'duplex_test_20180820_120sec_result.csv',
+                              'duplex_test_20180822_132sec_result.csv',
+                              'duplex_test_20180820_120sec_edit_result.csv',
+                              'duplex_test_20180822_132sec_edit_result.csv'))
+specfilepathvec <- file.path(duplexspecdir,
+                             c('duplex_test_20180816_120sec.csv',
+                               'duplex_test_20180821_2_120sec.csv',
+                               'duplex_test_20180821_120sec.csv',
+                               'duplex_test_20180820_120sec.csv',
+                               'duplex_test_20180822_132sec.csv',
+                               'duplex_test_20180820_120sec.csv',
+                               'duplex_test_20180822_132sec.csv'))
+for (i in 1:length(resfilepathvec)){
+  spec <- read.csv(specfilepathvec[i])
+  livetime <- as.numeric(as.character(spec[rownames(spec)=='Live Time',1]))
+  res <- read.csv(resfilepathvec[i])
+  res$ID <- substr(resfilepathvec[i], nchar(duplexresdir)+2, nchar(resfilepathvec[i])-4)
+  res[,c('Net','Backgr.')] <- res[,c('Net','Backgr.')]/livetime
+  if (i==1) {
+    resdf <- res
+  } else{
+    resdf <- rbind(resdf,res)
+  }
+}
+
+resdf[1:24,'type'] <- 'reference'
+resdf[25:40,'type'] <- 'erroneous'
+resdf[41:56,'type'] <- 'recalibrated'
+
+fun_mean <- function(x){
+  return(data.frame(y=mean(x),label=format(10^mean(x,na.rm=T), digits=4)))}
+
+ggplot(resdf, aes(x=Element,y=Net)) + 
+  geom_boxplot(aes(color=type)) + 
+  scale_y_log10()+
+  stat_summary(fun.data = fun_mean,aes(group=type),geom="text", vjust=-0.7, position=position_dodge(.9)) + 
+  theme_bw()+
+  theme(text=element_text(size=16))
+
+sdref <- setDT(resdf[resdf$type=='reference'])[,sd(Net)/mean(Net),by=.(Element)]
+
+
+
+
 
 
 
