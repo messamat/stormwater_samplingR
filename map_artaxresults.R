@@ -7,6 +7,7 @@ library(raster)
 library(ggplot2)
 library(ggpmisc)
 library(PeriodicTable)
+data(periodicTable)
 
 rootdir= "C:/Mathis/ICSL/stormwater" #UPDATE
 setwd(file.path(rootdir, "results")) 
@@ -47,10 +48,55 @@ df <- merge(fieldata_format, deconvrescastnorm, by='XRFID')
 #Compute average
 colnames(df)
 artaxmean <- setDT(df)[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID','Pair'), .SDcols=29:51]
+#Compute sd
+artaxsd <- setDT(df)[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID','Pair'), .SDcols=29:51]
+#Compute range
+artaxrange <- setDT(df)[,lapply(.SD,function(x) max(x,na.rm=TRUE)-min(x,na.rm=TRUE)), by=c('SiteID','Pair'), .SDcols=29:51]
 #Write out
 write.dbf(fielddata_artaxmean, 'artaxmean_20180827.dbf')
 
-#------------------ANALYZE DATA SPATIALLY
+#----------------- Assess variability of XRF measurements within trees
+#Format data
+artaxres <- merge(melt(artaxmean, id.vars=c('SiteID','Pair'), variable.name='Elem', value.name='mean'),
+      melt(artaxsd, id.vars=c('SiteID','Pair'), variable.name='Elem', value.name='sd'),
+      by=c('SiteID','Pair','Elem'))
+artaxres$cv <- with(artaxres, sd/mean)
+artaxres <- merge(artaxres, melt(artaxrange, id.vars=c('SiteID', 'Pair'), variable.name='Elem', value.name='range'),
+      by=c('SiteID','Pair','Elem'))
+artaxres <- merge(artaxres, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
+
+#Plot coefficient of variation distributions for every element
+cvmean_label <- as.data.frame(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),
+                                       paste0('Mean CV: ',format(mean(cv),digits=2)),
+                                       by=name])
+ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
+  geom_histogram()+
+  labs(x='Coefficient of variation', y='Count') + 
+  facet_wrap(~name, scales='free_x') + 
+  geom_text(data=cvmean_label, 
+            mapping=aes(x=Inf,y=Inf, label=V1, hjust=1, vjust=1))  + 
+  theme_classic() + 
+  theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
+        strip.text = element_text(size=14))
+
+#Plot relationship between elemental concentration and cv
+ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=mean, y=cv, color=name)) + 
+  geom_point()+
+  labs(x='Mean photon count (normalized)', y='Coefficient of variation') + 
+  facet_wrap(~name, scales='free') +
+  theme_classic() + 
+  theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
+        strip.text = element_text(size=14))
+
+#----------------- Assess variability of XRF measurements among trees within a site
+
+
+
+
+
+
+
+#------------------RELATE DATA TO POLLUTION PREDICTORS
 #Import shapefile of sites
 trees <- readOGR(dsn = file.path(datadir, 'field_data'), layer = 'sampling_sites_edit') 
 colnames(trees@data)[1] <- 'SiteID'
@@ -76,14 +122,15 @@ treesxrf[is.na(treesxrf$AADT),'AADT'] <- 0
 treesxrf[is.na(treesxrf$spdlm),'spdlm'] <- 0
 treesxrf[is.na(treesxrf$bing),'bing'] <- 0
 
-#Examine data
-data(periodicTable)
+#Format data
 treesxrf <- treesxrf[as.numeric(as.character(treesxrf$SiteID)) < 52,]
 allelem <- colnames(treesxrf@data) %in% periodicTable$symb
 metal_select <- c('Br','Co','Cr','Cu','Fe','Mn','Ni','Pb','Sr','Ti','V','Zn')
 treesxrf_melt <- melt(treesxrf@data, id.vars=colnames(treesxrf@data)[!(colnames(treesxrf@data) %in% metal_select)])
 treesxrf_melt <- merge(treesxrf_melt, periodicTable[,c('symb','name')], by.x='variable', by.y='symb')
 
+
+#Plot Bing Congestion index vs. XRF data
 ggplot(treesxrf_melt, aes(x=bing, y=value)) + 
   geom_point() + 
   labs(x='Bing congestion index', y='Photon count (normalized)') + 
@@ -99,6 +146,7 @@ ggplot(treesxrf_melt, aes(x=bing, y=value)) +
                   label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
   theme_classic()
 
+#Plot traffic volume index vs. XRF data
 ggplot(treesxrf_melt, aes(x=AADT, y=value)) + 
   geom_point() + 
   labs(x='Traffic volume index', y='Photon count (normalized)') + 
@@ -114,7 +162,7 @@ ggplot(treesxrf_melt, aes(x=AADT, y=value)) +
                   label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
   theme_classic()
 
-
+#Plot speed limit index vs. XRF data
 ggplot(treesxrf_melt, aes(x=spdlm, y=value)) + 
   geom_point() + 
   labs(x='Speed limit index', y='Photon count (normalized)') + 
@@ -131,6 +179,7 @@ ggplot(treesxrf_melt, aes(x=spdlm, y=value)) +
   theme_classic()
 
 
+#Multiple linear regressions
 Znlm <- lm(Zn~bing+sqrt(AADT), data=treesxrf)
 summary(Znlm)
 qplot(x=predict(Znlm), y=treesxrf$Zn) + geom_smooth(method='lm') + 
@@ -149,3 +198,5 @@ Pblm <- lm(Pb~bing+sqrt(AADT)+spdlm, data=treesxrf)
 summary(Pblm)
 qplot(x=predict(Pblm), y=treesxrf$Pb) + geom_smooth(method='lm')+ 
   geom_text(aes(label=treesxrf$SiteID))
+
+#Develop multilinear Kriging model
