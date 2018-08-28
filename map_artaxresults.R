@@ -1,14 +1,17 @@
 library(data.table)
-library(openxlsx)
 library(plyr)
+library(stringr)
+library(foreign)
 
 rootdir= "C:/Mathis/ICSL/stormwater" #UPDATE
 setwd(file.path(rootdir, "results")) 
 datadir = file.path(rootdir, "data")
 
-#Import and format field data
-fielddata <- read.xlsx(file.path(datadir,"field_data/field_data_raw_20180719.xlsx"), sheet=1,startRow=1, detectDates=T)
-sel <- fielddata[!is.na(fielddata$XRFmin),]
+#Import and format field data TO DO: make faster
+fielddata <- read.csv(file.path(datadir,"field_data/field_data_raw_20180808_edit.csv"))
+colnames(fielddata)[1] <- 'SiteID'
+fielddata$SiteID <- as.character(fielddata$SiteID)
+sel <- fielddata[!is.na(fielddata$XRFmin) & !is.na(fielddata$SiteID),]
 fieldata_format <- data.frame()
 for (row in seq(1,nrow(sel))) {
   extract <- sel[row,]
@@ -19,19 +22,27 @@ for (row in seq(1,nrow(sel))) {
   }
 }
 
-#Import ARTAX deconvolution results
-prelimdata <- read.xlsx(file.path(datadir,'XRF20180717/Recalibrated/XRF12_41_results_20180719.xlsx'), sheet=2,startRow=1, detectDates=T)
-TNCtourdata <- read.xlsx(file.path(datadir,'XRF20180717/Recalibrated/boardtour_data/Boardtour_results.xlsx'), sheet=2,startRow=1, detectDates=T)
-artaxdata <- rbind(prelimdata, TNCtourdata)
-#Normalize by Rh count
-artaxdata[,-1] <- artaxdata[,-1]/ artaxdata[["Rh.K12"]]
-artaxdata$XRFID <- as.numeric(substr(artaxdata$X1, 13, 14))
+#Import and format ARTAX deconvolution results
+artaxdir <- file.path(datadir, 'XRF20180808/PostBrukerCalibration/deconvolutionresults_XRF12_245_20180827')
+tablist <- list.files(artaxdir)
+for (i in 1:length(tablist)) {
+  res <- read.csv(file.path(artaxdir,tablist[i]))
+  res$XRFID <- str_extract(substr(tablist[i],41,43), "\\d+")
+  if (i==1){
+    deconvres <- res
+  } else{
+    deconvres <- rbind(deconvres, res)
+  }
+}
+deconvrescast <- dcast(deconvres, XRFID~Element, value.var='Net', fun.aggregate=sum)
+
 #Merge datasets
-df <- merge(fieldata_format, artaxdata, by='XRFID')
+df <- merge(fieldata_format, deconvrescast, by='XRFID')
 #Compute average
 colnames(df)
-artaxmean <- setDT(df)[,lapply(.SD,mean,na.rm=TRUE), by='#', .SDcols=28:50]
+artaxmean <- setDT(df)[,lapply(.SD,mean,na.rm=TRUE), by='SiteID', .SDcols=29:51]
 #Merge with original field data
-fielddata_artaxmean <- merge(fielddata, artaxmean, by='#')
+fielddata_artaxmean <- merge(fielddata, artaxmean, by='SiteID')
 #Write out
-write.csv(fielddata_artaxmean, 'fielddata_artaxmean_20180719.csv', row.names=F)
+write.dbf(fielddata_artaxmean, 'fielddata_artaxmean_20180827.dbf')
+
