@@ -72,7 +72,7 @@ cvmean_label <- as.data.frame(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),
 ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
   geom_histogram()+
   labs(x='Coefficient of variation', y='Count') + 
-  facet_wrap(~name, scales='free_x') + 
+  facet_wrap(~name) + 
   geom_text(data=cvmean_label, 
             mapping=aes(x=Inf,y=Inf, label=V1, hjust=1, vjust=1))  + 
   theme_classic() + 
@@ -89,12 +89,23 @@ ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=mean, y=cv, col
         strip.text = element_text(size=14))
 
 #----------------- Assess variability of XRF measurements among trees within a site
+artaxmeansite <- artaxmean[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
+artaxsdsite <- artaxmean[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
+artaxressite <- merge(melt(artaxmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
+                  melt(artaxsdsite, id.vars='SiteID', variable.name='Elem', value.name='sd'),
+                  by=c('SiteID','Elem'))
+artaxressite$cv <- with(artaxressite, sd/mean)
+artaxressite <- merge(artaxressite, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
-
-
-
-
-
+ggplot(artaxressite[!(artaxressite$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
+  geom_density()+
+  labs(x='Coefficient of variation', y='Count') + 
+  facet_wrap(~name) + 
+  theme_bw() + 
+  theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
+        strip.text = element_text(size=14),
+        panel.border = element_blank(),
+        axis.line = element_line(color='black'))
 
 #------------------RELATE DATA TO POLLUTION PREDICTORS
 #Import shapefile of sites
@@ -124,7 +135,6 @@ treesxrf[is.na(treesxrf$bing),'bing'] <- 0
 
 #Format data
 treesxrf <- treesxrf[as.numeric(as.character(treesxrf$SiteID)) < 52,]
-allelem <- colnames(treesxrf@data) %in% periodicTable$symb
 metal_select <- c('Br','Co','Cr','Cu','Fe','Mn','Ni','Pb','Sr','Ti','V','Zn')
 treesxrf_melt <- melt(treesxrf@data, id.vars=colnames(treesxrf@data)[!(colnames(treesxrf@data) %in% metal_select)])
 treesxrf_melt <- merge(treesxrf_melt, periodicTable[,c('symb','name')], by.x='variable', by.y='symb')
@@ -199,4 +209,25 @@ summary(Pblm)
 qplot(x=predict(Pblm), y=treesxrf$Pb) + geom_smooth(method='lm')+ 
   geom_text(aes(label=treesxrf$SiteID))
 
-#Develop multilinear Kriging model
+#------------------- Output overall variability table
+elemvar <- data.frame(Elem=colnames(deconvrescastnorm[,-1]),
+                      mean=colMeans(deconvrescastnorm[,-1]),
+                      min =t(setDT(deconvrescastnorm[,-1])[ , lapply(.SD, min)]),
+                      max =t(setDT(deconvrescastnorm[,-1])[ , lapply(.SD, max)]),
+                      sd= t(setDT(deconvrescastnorm[,-1])[ , lapply(.SD, sd)]))
+
+#Check percentage error from within tree variability
+df$SiteIDPair <- with(df, paste0(SiteID,Pair))
+allelem <- colnames(df) %in% periodicTable$symb
+samplingerrors <- sapply(colnames(df)[allelem], function(x) {
+  withintree <- summary(aov(as.formula(paste(x, "~SiteIDPair")), data=df))  
+  withinsite <- summary(aov(as.formula(paste(x, "~SiteID")), data=df))  
+  
+  return(c(tree_error=withintree[[1]]$`Sum Sq`[2]/sum(withintree[[1]]$`Sum Sq`),
+           site_error=(withinsite[[1]]$`Sum Sq`[2]-withintree[[1]]$`Sum Sq`[2])/sum(withinsite[[1]]$`Sum Sq`)))
+})
+elemvar <- cbind(elemvar, t(samplingerrors))
+elemvar$total_error <- elemvar$tree_error + elemvar$site_error
+
+
+#Develop multilinear bayesian Kriging model (nesting measurement errors within tree and site)
