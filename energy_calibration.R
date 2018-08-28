@@ -1,11 +1,19 @@
+#Author: Mathis Messager
+#Date created: 2018/08/23
 
-#Only works for Tracer III SD data (PDZ v24 file format)
+#Purpose: perform gain shift adjustment (energy calibration) on XRF measurements.
+#In case of a shift in the relationship between XRF analyzer channel and energy level, XRF spectra can become misaligned
+#This leads to erroneous photon count results even after Bayesian Deconvolution. This script automatically realign
+#the spectra for all measurements in a directory based on reference elemental peaks provided by the user.
+#The output is a .txt file that can be read by the ARTAX software to perform Bayesian Deconvolution.
+#This script has only been tested on Tracer III SD data (PDZ v24 file format)
+
 library(plyr)
 library(ggplot2)
 library(gridExtra)
+library(data.table)
 
-#To do: 
-#Install packrat and snapshot package configuration
+#To-do list: Install packrat and snapshot package configuration
 
 ##----------------------------------------------
 #Define directory structure
@@ -25,13 +33,15 @@ if (!file.exists(globalR)) {
   system(paste("git clone", gitrep)) #Clone github repository
   setwd(cloudcaldir)
   system("git status")
-  source(file.path(cloudcaldir,'global.R'))
   setwd(resdir)
-  options(digits=8)
-  options(warn=0)
 } else {
   warning("CloudCal package is already installed.",immediate.=T)
 }
+setwd(cloudcaldir)
+source(file.path(cloudcaldir,'global.R'))
+setwd(resdir)
+options(digits=8)
+options(warn=0)
 
 #Run cloudcal locally
 #shiny::runGitHub("leedrake5/CloudCal")
@@ -151,12 +161,12 @@ batchcal <- function(dirpath, df) {
     spec <- readPDZ24Data(pdz_filepath,pdz_filename) #Read
     caldfext <- energycaldat(spec, df) #Get data for calibration
     evch_mod <- modplotcal(spec, caldfext, pdz_filepath, pdz_filename, txt_outdir) 
-    writecal(spec, evch_cor, pdz_filename, txt_outdir)
+    writecal(spec, evch_mod, pdz_filename, txt_outdir)
   }
 }
 
 ##----------------------------------------------
-#Run  for all spectra
+#Run  for all spectra in directory
 
 #DF of elements and energy transitions to use in calibration
 caldf <- data.frame(elem = as.character(c('Fe','Fe','Cu','Zn','Sr','Pd')),
@@ -209,31 +219,19 @@ for (i in 1:length(resfilepathvec)){
     resdf <- rbind(resdf,res)
   }
 }
+resdf[1:51,'type'] <- 'reference'
+resdf[52:85,'type'] <- 'erroneous'
+resdf[86:119,'type'] <- 'recalibrated'
 
-resdf[1:24,'type'] <- 'reference'
-resdf[25:40,'type'] <- 'erroneous'
-resdf[41:56,'type'] <- 'recalibrated'
-
+#Plot result comparison
 fun_mean <- function(x){
   return(data.frame(y=mean(x),label=format(10^mean(x,na.rm=T), digits=4)))}
 
 ggplot(resdf, aes(x=Element,y=Net)) + 
   geom_boxplot(aes(color=type)) + 
   scale_y_log10()+
-  stat_summary(fun.data = fun_mean,aes(group=type),geom="text", vjust=-0.7, position=position_dodge(.9)) + 
+  stat_summary(fun.data = fun_mean,aes(group=type),geom="text", vjust=-0.7,angle=45, position=position_dodge(.9)) + 
   theme_bw()+
   theme(text=element_text(size=16))
 
 sdref <- setDT(resdf[resdf$type=='reference'])[,sd(Net)/mean(Net),by=.(Element)]
-
-
-
-
-
-
-
-
-
-
-
-
