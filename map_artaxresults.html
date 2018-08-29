@@ -124,19 +124,20 @@ $(document).ready(function () {
 
 <h1 class="title toc-ignore">map_artaxresults.R</h1>
 <h4 class="author"><em>install</em></h4>
-<h4 class="date"><em>Tue Aug 28 17:28:57 2018</em></h4>
+<h4 class="date"><em>Tue Aug 28 17:38:54 2018</em></h4>
 
 </div>
 
 
 <pre class="r"><code>#options(warn=-1)
-library(data.table, quietly = TRUE, warn.conflicts = FALSE)
-library(plyr, quietly = TRUE, warn.conflicts = FALSE)
-library(stringr, quietly = TRUE, warn.conflicts = FALSE)
-library(foreign, quietly = TRUE, warn.conflicts = FALSE)</code></pre>
+library(data.table)
+library(plyr)
+library(stringr)
+library(foreign)</code></pre>
 <pre><code>## Warning: package 'foreign' was built under R version 3.5.1</code></pre>
-<pre class="r"><code>library(rgdal, quietly = TRUE, warn.conflicts = FALSE)</code></pre>
+<pre class="r"><code>library(rgdal)</code></pre>
 <pre><code>## Warning: package 'rgdal' was built under R version 3.5.1</code></pre>
+<pre><code>## Loading required package: sp</code></pre>
 <pre><code>## Warning: package 'sp' was built under R version 3.5.1</code></pre>
 <pre><code>## rgdal: version: 1.3-4, (SVN revision 766)
 ##  Geospatial Data Abstraction Library extensions to R successfully loaded
@@ -146,18 +147,41 @@ library(foreign, quietly = TRUE, warn.conflicts = FALSE)</code></pre>
 ##  Loaded PROJ.4 runtime: Rel. 4.9.3, 15 August 2016, [PJ_VERSION: 493]
 ##  Path to PROJ.4 shared files: C:/Users/install/Documents/R/win-library/3.5/rgdal/proj
 ##  Linking to sp version: 1.3-1</code></pre>
-<pre class="r"><code>library(raster, quietly = TRUE, warn.conflicts = FALSE)
-library(ggplot2, quietly = TRUE, warn.conflicts = FALSE)</code></pre>
+<pre class="r"><code>library(raster)</code></pre>
+<pre><code>## 
+## Attaching package: 'raster'</code></pre>
+<pre><code>## The following object is masked from 'package:data.table':
+## 
+##     shift</code></pre>
+<pre class="r"><code>library(ggplot2)</code></pre>
 <pre><code>## Warning: package 'ggplot2' was built under R version 3.5.1</code></pre>
-<pre class="r"><code>library(ggpmisc, quietly = TRUE, warn.conflicts = FALSE)</code></pre>
+<pre class="r"><code>library(ggpmisc)</code></pre>
 <pre><code>## Warning: package 'ggpmisc' was built under R version 3.5.1</code></pre>
 <pre><code>## For news about 'ggpmisc', please, see https://www.r4photobiology.info/</code></pre>
 <pre><code>## For on-line documentation see https://docs.r4photobiology.info/ggpmisc/</code></pre>
-<pre class="r"><code>library(PeriodicTable, quietly = TRUE, warn.conflicts = FALSE)
-library(kableExtra, quietly = TRUE, warn.conflicts = FALSE)</code></pre>
+<pre class="r"><code>library(PeriodicTable)
+library(kableExtra)</code></pre>
 <pre><code>## Warning: package 'kableExtra' was built under R version 3.5.1</code></pre>
-<pre class="r"><code>library(dplyr, quietly = TRUE, warn.conflicts = FALSE)</code></pre>
+<pre class="r"><code>library(dplyr)</code></pre>
 <pre><code>## Warning: package 'dplyr' was built under R version 3.5.1</code></pre>
+<pre><code>## 
+## Attaching package: 'dplyr'</code></pre>
+<pre><code>## The following objects are masked from 'package:raster':
+## 
+##     intersect, select, union</code></pre>
+<pre><code>## The following objects are masked from 'package:plyr':
+## 
+##     arrange, count, desc, failwith, id, mutate, rename, summarise,
+##     summarize</code></pre>
+<pre><code>## The following objects are masked from 'package:data.table':
+## 
+##     between, first, last</code></pre>
+<pre><code>## The following objects are masked from 'package:stats':
+## 
+##     filter, lag</code></pre>
+<pre><code>## The following objects are masked from 'package:base':
+## 
+##     intersect, setdiff, setequal, union</code></pre>
 <pre class="r"><code>data(periodicTable)
 
 rootdir &lt;- &quot;C:/Mathis/ICSL/stormwater&quot; #UPDATE
