@@ -1,3 +1,4 @@
+#options(warn=-1)
 library(data.table)
 library(plyr)
 library(stringr)
@@ -7,13 +8,18 @@ library(raster)
 library(ggplot2)
 library(ggpmisc)
 library(PeriodicTable)
+library(kableExtra)
+library(dplyr)
 data(periodicTable)
 
-rootdir= "C:/Mathis/ICSL/stormwater" #UPDATE
-setwd(file.path(rootdir, "results")) 
-datadir = file.path(rootdir, "data")
+rootdir <- "C:/Mathis/ICSL/stormwater" #UPDATE
+resdir <- file.path(rootdir, "results")
+datadir <- file.path(rootdir, "data")
 
-#Import and format field data TO DO: make faster
+#--------------------------------------------------------------------------------------
+# Import data 
+
+#Import and format field data 
 fielddata <- read.csv(file.path(datadir,"field_data/field_data_raw_20180808_edit.csv"))
 colnames(fielddata)[1] <- 'SiteID'
 fielddata$SiteID <- as.character(fielddata$SiteID)
@@ -40,22 +46,33 @@ for (i in 1:length(tablist)) {
     deconvres <- rbind(deconvres, res)
   }
 }
- <- dcast(deconvres, XRFID~Element, value.var='Net', fun.aggregate=sum)
+
+#Import GIS data
+trees <- readOGR(dsn = file.path(datadir, 'field_data'), layer = 'sampling_sites_edit') 
+heat_AADT <- raster(file.path(resdir, 'heataadt_int'))
+heat_spdlm <- raster(file.path(resdir, 'heatspdlm_int'))
+heat_bing <- raster(file.path(resdir, 'heatbing_int')) #Replace with heatbing_index for all PugetSound to be able to include Highway 2 sample
+
+#--------------------------------------------------------------------------------------
+#Format XRF data
+
+deconvrescast <- dcast(deconvres, XRFID~Element, value.var='Net', fun.aggregate=sum)
 #Normalize data by Rhodium photon count 
 deconvrescastnorm <- cbind(XRFID=deconvrescast$XRFID, sweep(deconvrescast[,-1], MARGIN=1, FUN='/', STATS=deconvrescast$Rh))
 #Merge datasets
 df <- merge(fieldata_format, deconvrescastnorm, by='XRFID')
 #Compute average
-colnames(df)
 artaxmean <- setDT(df)[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID','Pair'), .SDcols=29:51]
 #Compute sd
 artaxsd <- setDT(df)[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID','Pair'), .SDcols=29:51]
 #Compute range
 artaxrange <- setDT(df)[,lapply(.SD,function(x) max(x,na.rm=TRUE)-min(x,na.rm=TRUE)), by=c('SiteID','Pair'), .SDcols=29:51]
 #Write out
-write.dbf(fielddata_artaxmean, 'artaxmean_20180827.dbf')
+#write.dbf(artaxmean, 'artaxmean_20180827.dbf')
 
-#----------------- Assess variability of XRF measurements within trees
+#--------------------------------------------------------------------------------------
+#Assess within-tree variability of XRF measurements 
+
 #Format data
 artaxres <- merge(melt(artaxmean, id.vars=c('SiteID','Pair'), variable.name='Elem', value.name='mean'),
       melt(artaxsd, id.vars=c('SiteID','Pair'), variable.name='Elem', value.name='sd'),
@@ -70,7 +87,7 @@ cvmean_label <- as.data.frame(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),
                                        paste0('Mean CV: ',format(mean(cv),digits=2)),
                                        by=name])
 ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
-  geom_histogram()+
+  geom_density()+
   labs(x='Coefficient of variation', y='Count') + 
   facet_wrap(~name) + 
   geom_text(data=cvmean_label, 
@@ -88,7 +105,9 @@ ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=mean, y=cv, col
   theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
         strip.text = element_text(size=14))
 
-#----------------- Assess variability of XRF measurements among trees within a site
+#--------------------------------------------------------------------------------------
+#Assess within-site variability of XRF measurements 
+
 artaxmeansite <- artaxmean[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
 artaxsdsite <- artaxmean[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
 artaxressite <- merge(melt(artaxmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
@@ -107,20 +126,16 @@ ggplot(artaxressite[!(artaxressite$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fil
         panel.border = element_blank(),
         axis.line = element_line(color='black'))
 
-#------------------RELATE DATA TO POLLUTION PREDICTORS
+#--------------------------------------------------------------------------------------
+#Relate XRF data to pollution predictors 
+
 #Import shapefile of sites
-trees <- readOGR(dsn = file.path(datadir, 'field_data'), layer = 'sampling_sites_edit') 
 colnames(trees@data)[1] <- 'SiteID'
 
 #Join field data to site shapefile
 treesxrf <- merge(trees, artaxmean, by=c('SiteID','Pair'))
 treesxrf <- treesxrf[!is.na(treesxrf$Fe) | treesxrf$SiteID==1,]
 
-#Define pollution predictor layers
-heat_AADT <- raster(file.path(resdir, 'heataadt_int'))
-heat_spdlm <- raster(file.path(resdir, 'heatspdlm_int'))
-heat_bing <- raster(file.path(resdir, 'heatbing_int')) #Replace with heatbing_index for all PugetSound to be able to include Highway 2 sample
-  
 #Project site shapefile to same coordinate system as predictors
 treesxrf <- spTransform(treesxrf, crs(heat_bing))
   
@@ -139,6 +154,10 @@ metal_select <- c('Br','Co','Cr','Cu','Fe','Mn','Ni','Pb','Sr','Ti','V','Zn')
 treesxrf_melt <- melt(treesxrf@data, id.vars=colnames(treesxrf@data)[!(colnames(treesxrf@data) %in% metal_select)])
 treesxrf_melt <- merge(treesxrf_melt, periodicTable[,c('symb','name')], by.x='variable', by.y='symb')
 
+#Check distribution of aadt, bing, and spdlm indices
+qplot(sqrt(treesxrf$AADT))
+qplot(sqrt(treesxrf$spdlm))
+qplot(sqrt(treesxrf$bing))
 
 #Plot Bing Congestion index vs. XRF data
 ggplot(treesxrf_melt, aes(x=bing, y=value)) + 
@@ -192,8 +211,8 @@ ggplot(treesxrf_melt, aes(x=spdlm, y=value)) +
 #Multiple linear regressions
 Znlm <- lm(Zn~bing+sqrt(AADT), data=treesxrf)
 summary(Znlm)
-qplot(x=predict(Znlm), y=treesxrf$Zn) + geom_smooth(method='lm') + 
-  geom_text(aes(label=treesxrf$SiteID))
+qplot(x=predict(Znlm), y=treesxrf$Zn) + geom_smooth(method='lm') 
+#+ geom_text(aes(label=treesxrf$SiteID))
 
 Felm <- lm(Fe~bing+sqrt(AADT)+spdlm, data=treesxrf)
 summary(Felm)
@@ -201,33 +220,66 @@ qplot(x=predict(Felm), y=treesxrf$Fe) + geom_smooth(method='lm')
 
 Culm <- lm(Cu~sqrt(AADT), data=treesxrf)
 summary(Culm)
-qplot(x=predict(Culm), y=treesxrf$Cu) + geom_smooth(method='lm')+ 
-  geom_text(aes(label=treesxrf$SiteID))
+qplot(x=predict(Culm), y=treesxrf$Cu) + geom_smooth(method='lm') 
 
 Pblm <- lm(Pb~bing+sqrt(AADT)+spdlm, data=treesxrf)
 summary(Pblm)
-qplot(x=predict(Pblm), y=treesxrf$Pb) + geom_smooth(method='lm')+ 
-  geom_text(aes(label=treesxrf$SiteID))
+qplot(x=predict(Pblm), y=treesxrf$Pb) + geom_smooth(method='lm')
 
-#------------------- Output overall variability table
+#--------------------------------------------------------------------------------------
+# Output overall variability table 
 elemvar <- data.frame(Elem=colnames(deconvrescastnorm[,-1]),
                       mean=colMeans(deconvrescastnorm[,-1]),
                       min =t(setDT(deconvrescastnorm[,-1])[ , lapply(.SD, min)]),
                       max =t(setDT(deconvrescastnorm[,-1])[ , lapply(.SD, max)]),
                       sd= t(setDT(deconvrescastnorm[,-1])[ , lapply(.SD, sd)]))
 
-#Check percentage error from within tree variability
+#Generate table of statistics
 df$SiteIDPair <- with(df, paste0(SiteID,Pair))
-allelem <- colnames(df) %in% periodicTable$symb
-samplingerrors <- sapply(colnames(df)[allelem], function(x) {
+allelem <- colnames(df) %in% periodicTable$symb #Get all column which correspond to an element in the periodic table
+#Apply to each element:
+elemwise_comps <- sapply(colnames(df)[allelem], function(x) {
+  #Analyze error within tree samples
   withintree <- summary(aov(as.formula(paste(x, "~SiteIDPair")), data=df))  
-  withinsite <- summary(aov(as.formula(paste(x, "~SiteID")), data=df))  
-  
+  #Analyze error among tree samples within sites
+  withinsite <- summary(aov(as.formula(paste(x, "~SiteID")), data=df)) 
+  #Regress pollutant predictors against XRF data for each element
+  bing_lm <- summary(lm(as.formula(paste(x, "~bing")), data=treesxrf))
+  aadt_lm <- summary(lm(as.formula(paste(x, "~sqrt(AADT)")), data=treesxrf))
+  spdlm_lm <- summary(lm(as.formula(paste(x, "~sqrt(spdlm)")), data=treesxrf))
+    
   return(c(tree_error=withintree[[1]]$`Sum Sq`[2]/sum(withintree[[1]]$`Sum Sq`),
-           site_error=(withinsite[[1]]$`Sum Sq`[2]-withintree[[1]]$`Sum Sq`[2])/sum(withinsite[[1]]$`Sum Sq`)))
+           site_error=(withinsite[[1]]$`Sum Sq`[2]-withintree[[1]]$`Sum Sq`[2])/sum(withinsite[[1]]$`Sum Sq`),
+           total_error = withinsite[[1]]$`Sum Sq`[2]/sum(withinsite[[1]]$`Sum Sq`),
+           bing_r2 = bing_lm$adj.r.squared, 
+           bing_sig = bing_lm$coefficients[8],
+           aadt_r2 = aadt_lm$adj.r.squared,
+           aadt_sig = aadt_lm$coefficients[8],
+           spdlm_r2 = spdlm_lm$adj.r.squared,
+           spdlm_sig = spdlm_lm$coefficients[8]
+           ))
 })
-elemvar <- cbind(elemvar, t(samplingerrors))
-elemvar$total_error <- elemvar$tree_error + elemvar$site_error
+elemvar <- cbind(elemvar, t(elemwise_comps))
+#Get rid of useless elements (signals from XRF Tracer detector and collimator, not in sample)
+elemvar <- elemvar[!(elemvar$Elem %in% c('Ar','Rh','Pd')),]
+#Get full element names
+elemvar <- merge(elemvar, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
+
+#Format and output table
+options(knitr.table.format = "html") 
+elemvar[order(-elemvar$bing_r2),] %>%
+  mutate(
+    congestion_r2 = cell_spec(format(bing_r2, digits=3), bold = ifelse(bing_sig < 0.05, TRUE, FALSE)),
+    volume_r2 = cell_spec(format(aadt_r2, digits=3), bold = ifelse(aadt_sig < 0.05, TRUE, FALSE)),
+    speedlimit_r2 = cell_spec(format(spdlm_r2, digits=3), bold = ifelse(spdlm_sig < 0.05, TRUE, FALSE))
+  ) %>%
+  select(-c(9:14)) %>%
+  kable(format = "html", escape = F) %>%
+  kable_styling("striped", full_width = F) 
+
+#%>%
+#  save_kable(file.path(resdir, 'XRFrestab_20180828.doc'), self_contained=T)
+
+#------------- Develop multilinear bayesian Kriging model  --------------------
 
 
-#Develop multilinear bayesian Kriging model (nesting measurement errors within tree and site)
