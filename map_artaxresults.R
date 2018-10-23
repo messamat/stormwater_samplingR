@@ -10,11 +10,18 @@ library(ggpmisc)
 library(PeriodicTable)
 library(kableExtra)
 library(dplyr)
+library(hexbin)
 data(periodicTable)
 
 rootdir <- "C:/Mathis/ICSL/stormwater" #UPDATE
 resdir <- file.path(rootdir, "results")
 datadir <- file.path(rootdir, "data")
+
+vispal <- function(dat) {
+  barplot(rep(1,length(dat)), col=dat)
+}
+
+#Element colors: http://jmol.sourceforge.net/jscolors/
 
 #--------------------------------------------------------------------------------------
 # Import data 
@@ -68,7 +75,7 @@ artaxsd <- setDT(df)[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID','Pair'), .SDcols=
 #Compute range
 artaxrange <- setDT(df)[,lapply(.SD,function(x) max(x,na.rm=TRUE)-min(x,na.rm=TRUE)), by=c('SiteID','Pair'), .SDcols=29:51]
 #Write out
-#write.dbf(artaxmean, 'artaxmean_20180827.dbf')
+write.dbf(artaxmean, 'artaxmean_20180827.dbf')
 
 #--------------------------------------------------------------------------------------
 #Assess within-tree variability of XRF measurements 
@@ -150,7 +157,10 @@ treesxrf[is.na(treesxrf$bing),'bing'] <- 0
 
 #Format data
 treesxrf <- treesxrf[as.numeric(as.character(treesxrf$SiteID)) < 52,]
-metal_select <- c('Br','Co','Cr','Cu','Fe','Mn','Ni','Pb','Sr','Ti','V','Zn')
+#metal_select <- c('Br','Co','Cr','Cu','Fe','Mn','Ni','Pb','Sr','Ti','V','Zn')
+#metal_select <- c('Fe','Zn','Co','Cr') #for Phil 2018/10/02 'goodresults'
+metal_select <- c('Ca','K','Sr','P') #for Phil 2018/10/02 'randomresults'
+
 treesxrf_melt <- melt(treesxrf@data, id.vars=colnames(treesxrf@data)[!(colnames(treesxrf@data) %in% metal_select)])
 treesxrf_melt <- merge(treesxrf_melt, periodicTable[,c('symb','name')], by.x='variable', by.y='symb')
 
@@ -158,22 +168,58 @@ treesxrf_melt <- merge(treesxrf_melt, periodicTable[,c('symb','name')], by.x='va
 qplot(sqrt(treesxrf$AADT))
 qplot(sqrt(treesxrf$spdlm))
 qplot(sqrt(treesxrf$bing))
+setDT(treesxrf_melt)[,valuestand := (value-min(value, na.rm=T))/(max(value)-min(value)), by=variable]
+
+rPal <- colorRampPalette(c('#fff5f0','#cb181d'))
+bPal <- colorRampPalette(c('#deebf7','#2171b5'))
+treesxrf_melt$valuefact <- factor(treesxrf_melt$valuestand, levels= unique(as.character(treesxrf_melt$valuestand[order(treesxrf_melt$valuestand,
+                                                                                                                       treesxrf_melt$bing)])))
+
+col1 <- t(col2rgb(bPal(100)[as.numeric(cut(treesxrf_melt$valuestand,breaks = 100))]))
+colnames(col1) <- paste0(colnames(col1),'_1')
+col2 = t(col2rgb(rPal(100)[as.numeric(cut(treesxrf_melt$bing,breaks = 100))]))
+colnames(col2) <- paste0(colnames(col2),'_2')
+cols <- data.table(cbind(col1, col2))
+
+colsmix <- cols[,mixcolor(0.5, RGB(red_1, green_1,blue_1), RGB(red_2, green_2,blue_2))]
+treesxrf_melt$colsmix <- rgb(colsmix@coords, maxColorValue=255)
+
+
+#colsmix <- factor(colsmix, levels= unique(colsmix[order(treesxrf_melt$valuestand,
+#                                                        treesxrf_melt$bing)]))
+
+vispal(rgb(col1, maxColorValue=255))
+vispal(rgb(col2, maxColorValue=255))
+#vispal(as.character(colsmix))
 
 #Plot Bing Congestion index vs. XRF data
-ggplot(treesxrf_melt, aes(x=bing, y=value)) + 
-  geom_point() + 
-  labs(x='Bing congestion index', y='Photon count (normalized)') + 
+bing_xrf <- ggplot(treesxrf_melt, aes(x=bing, y=as.numeric(as.character(valuefact)))) + 
+  geom_point(aes(color=colsmix), size=3, alpha=1/4) +
+  scale_color_identity() +
+  labs(x='Traffic congestion (Bing index)', y='Concentration in moss (normalized photon count)') + 
   facet_wrap(~name, nrow=3, scales='free_y') +
-  geom_smooth(method='lm', formula = y ~ x, se = T) + 
-  stat_poly_eq(aes(label = paste(..rr.label..)), 
-               label.x.npc = "right", label.y.npc = 0.02,
-               formula = y ~ x, parse = TRUE, size = 3)+
-  stat_fit_glance(method = 'lm',
-                  method.args = list(formula = y ~ x),
-                  geom = 'text',
-                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
-                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
-  theme_classic()
+  geom_smooth(method='lm', se = T, color='black') + 
+  # stat_poly_eq(aes(label = paste(..rr.label..)), 
+  #              label.x.npc = "right", label.y.npc = 0.02,
+  #              formula = y ~ x, parse = TRUE, size = 5)+
+  # stat_fit_glance(method = 'lm',
+  #                 method.args = list(formula = y ~ x),
+  #                 geom = 'text',
+  #                 aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+  #                 label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  theme_classic() + 
+  theme(legend.position = 'none', 
+        axis.text = element_blank(), 
+        axis.ticks = element_blank(),
+        text = element_text(size=16),
+        axis.title = element_blank())
+bing_xrf
+
+
+png(file.path(resdir, 'prelim_badXRFresults.png'), width=8, height=8, units = 'in', res=400)
+#pdf(file.path(resdir, 'prelim_badXRFresults.pdf'), width=8, height=8)
+bing_xrf
+dev.off()
 
 #Plot traffic volume index vs. XRF data
 ggplot(treesxrf_melt, aes(x=AADT, y=value)) + 
