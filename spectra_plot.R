@@ -2,15 +2,15 @@ library(ggplot2)
 library(data.table)
 
 #Import raw spectra
-spec42 <-read.csv('C:/Mathis/ICSL/stormwater/data/XRF20180717/Recalibrated/boardtour_data/ANALYZE_EMP-42@180718_152613.txt')
-spec45 <-read.csv('C:/Mathis/ICSL/stormwater/data/XRF20180717/Recalibrated/boardtour_data/ANALYZE_EMP-45@180718_152613.txt')
+spec42 <-read.csv('C:/Mathis/ICSL/stormwater/data/XRF20180808/Recalibrated/boardtour_data/ANALYZE_EMP-42@180718_152613.txt')
+spec45 <-read.csv('C:/Mathis/ICSL/stormwater/data/XRF20180808/Recalibrated/boardtour_data/ANALYZE_EMP-45@180718_152613.txt')
 specs <- merge(spec42, spec45)
 #Format dfs
 colnames(specs) <- c('Energy', 'XRF42', 'XRF45')
 specs_melt <- melt(setDT(specs), id.vars='Energy')
 
 #Import deconvolution model
-spec42_deconv <-read.csv('C:/Mathis/ICSL/stormwater/data/XRF20180717/Recalibrated/boardtour_data/ANALYZE_EMP-42@180718_152613_result.csv')
+spec42_deconv <-read.csv('C:/Mathis/ICSL/stormwater/data/XRF201800808/Recalibrated/boardtour_data/ANALYZE_EMP-42@180718_152613_result.csv')
 spec42_deconv$val <- with(spec42_deconv, Net+Backgr.)
 sel <- c('Fe','Cu', 'Zn', 'Pb', 'Sr')
 spec42_deconv_sel <- spec42_deconv[spec42_deconv$Element %in% sel,]
