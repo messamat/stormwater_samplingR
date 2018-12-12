@@ -1,5 +1,6 @@
 #options(warn=-1)
 library(data.table)
+library(xlsx)
 library(plyr)
 library(stringr)
 library(foreign)
@@ -11,17 +12,37 @@ library(PeriodicTable)
 library(kableExtra)
 library(dplyr)
 library(hexbin)
+library(colorspace)
+library(plotly)
+library(listviewer)
 data(periodicTable)
 
 rootdir <- "C:/Mathis/ICSL/stormwater" #UPDATE
 resdir <- file.path(rootdir, "results")
 datadir <- file.path(rootdir, "data")
 
-vispal <- function(dat) {
-  barplot(rep(1,length(dat)), col=dat)
+#Element colors: http://jmol.sourceforge.net/jscolors/
+
+#Define functions
+deconvolution_import <- function(artaxdir, idstart, idend) {
+  #Collate all results from ARTAX deconvolution outputs
+  tablist <- list.files(artaxdir)
+  for (i in 1:length(tablist)) {
+    res <- read.csv(file.path(artaxdir,tablist[i]))
+    res$XRFID <- str_extract(substr(tablist[i], idstart, idend), "[0-9A-B_]+")
+    if (i==1){
+      deconvres <- res
+    } else{
+      deconvres <- rbind(deconvres, res)
+    }
+  }
+  return(setDT(deconvres))
 }
 
-#Element colors: http://jmol.sourceforge.net/jscolors/
+vispal <- function(dat) {
+  #Create a color palette graph
+  barplot(rep(1,length(dat)), col=dat)
+}
 
 #--------------------------------------------------------------------------------------
 # Import data 
@@ -41,18 +62,37 @@ for (row in seq(1,nrow(sel))) {
   }
 }
 
-#Import and format ARTAX deconvolution results
-artaxdir <- file.path(datadir, 'XRF20180808/PostBrukerCalibration/deconvolutionresults_XRF12_245_20180827')
-tablist <- list.files(artaxdir)
-for (i in 1:length(tablist)) {
-  res <- read.csv(file.path(artaxdir,tablist[i]))
-  res$XRFID <- str_extract(substr(tablist[i],41,43), "\\d+")
-  if (i==1){
-    deconvres <- res
-  } else{
-    deconvres <- rbind(deconvres, res)
-  }
+#Import and format field XRF deconvolution results
+fieldres <- deconvolution_import(file.path(datadir, 'XRF20181210/PostBrukerCalibration/deconvolutionresults_XRF12_245_20180827'),
+                                 idstart = 41, idend= 43)
+
+#Import raw XRF lab data
+labxrf_list <- data.table(filename = grep('\\.csv$', list.files(file.path(datadir, 'XRF20181210/PelletMeasurements')) ,value=T))
+for (i in labxrf_list$filename) {
+  print(i)
+  xrfrec <- read.csv(file.path(datadir, 'XRF20181210/PelletMeasurements', i))
+  labxrf_list[filename == i, `:=`(cps = as.numeric(as.character(xrfrec[rownames(xrfrec) == 'Valid Count Last Packet',])),
+                                  c_cum = as.numeric(as.character(xrfrec[rownames(xrfrec) == 'Valid Accumulated Counts',])),
+                                  duration = as.numeric(as.character(xrfrec[rownames(xrfrec) == 'Duration Time',]))
+  )]
 }
+setDT(labxrf_list)[, `:=`(c_cum_ps = c_cum/duration,
+                          SiteID = regmatches(labxrf_list$filename, regexpr('[0-9A-Z]+[_][0-9]', labxrf_list$filename)))]
+
+# problem_recs <- setDT(labxrf_list)[SiteID %in% c('3A_1', '3A_2','6B_2','7A_1', '7A_2','19A_1', '19A_2', '20A_1',
+#                                                  '20B_1', '20B_2','22A_1', '22A_2', '28B_2', '32A_1', '33B_1', 
+#                                                  '33B_2','34A_1','36A_2', '37A_1', '37A_2','40A_1', '42A_1', 
+#                                                  '42B_1','42B_2','44A_1', '44A_2', '45A_1', '45A_2','46A_1','46A_2',
+#                                                  '48A_1','49A_1', '49A_2','53A_1', '53A_2', '54B_2','55B_1', '55B_2',
+#                                                  '57A_1', '57A_2','59A_1', '59A_2', '61A_1', '61A_2'),]
+labxrf_list[c_cum_ps > 90000,][!(labxrf_list[c_cum_ps > 90000, SiteID] %in% problem_recs$SiteID)]
+
+#Import and format lab XRF deconvolution results
+labres <- deconvolution_import(file.path(datadir, 'XRF20181210/PelletMeasurements/deconvolutionresults_labXRF_20181212'),
+                               idstart = 29, idend= 33)
+#Import ICP-OES data
+ICPdat <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_120618-2_edit20181210.xlsx'), 1)
+ICPthresholds <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_120618-2_edit20181210.xlsx'), 2)
 
 #Import GIS data
 trees <- readOGR(dsn = file.path(datadir, 'field_data'), layer = 'sampling_sites_edit') 
@@ -63,30 +103,43 @@ heat_bing <- raster(file.path(resdir, 'heatbing_int')) #Replace with heatbing_in
 #--------------------------------------------------------------------------------------
 #Format XRF data
 
-deconvrescast <- dcast(deconvres, XRFID~Element, value.var='Net', fun.aggregate=sum)
-#Normalize data by Rhodium photon count 
-deconvrescastnorm <- cbind(XRFID=deconvrescast$XRFID, sweep(deconvrescast[,-1], MARGIN=1, FUN='/', STATS=deconvrescast$Rh))
+#Cast while summing net photon counts across electron transitions
+fieldrescast <- dcast(setDT(fieldres), XRFID~Element, value.var='Net', fun.aggregate=sum) 
+fieldrescast[, XRFID := as.numeric(gsub('[_]', '', XRFID))]
+labrescast <- dcast(setDT(labres), XRFID~Element, value.var='Net', fun.aggregate=sum)
+#Average lab XRF results over multiple measurements for a given pellet
+labrescast <- labrescast[, `:=`(SiteID = gsub('[A-B].*', '', XRFID),
+                                Pair = gsub('[0-9_]+', '', XRFID),
+                                XRFID = NULL)]
+labrescast <- labrescast[, lapply(.SD, mean), by = .(SiteID, Pair)]
+
+#Normalize data by Rhodium photon count
+fieldrescastnorm <- fieldrescast[, lapply(.SD, function(x) {x/Rh}), by = XRFID]
+labrescastnorm <- labrescast[, lapply(.SD, function(x) {x/Rh}), by = .(SiteID, Pair)]
+  
 #Merge datasets
-df <- merge(fieldata_format, deconvrescastnorm, by='XRFID')
+fieldt <- setDT(fieldata_format)[fieldrescastnorm, on='XRFID']
+labdt <- setDT(fieldata_format)[labrescastnorm, on =  .(SiteID, Pair)]
+
 #Compute average
-artaxmean <- setDT(df)[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID','Pair'), .SDcols=29:51]
-#Compute sd
-artaxsd <- setDT(df)[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID','Pair'), .SDcols=29:51]
-#Compute range
-artaxrange <- setDT(df)[,lapply(.SD,function(x) max(x,na.rm=TRUE)-min(x,na.rm=TRUE)), by=c('SiteID','Pair'), .SDcols=29:51]
-#Write out
-write.dbf(artaxmean, 'artaxmean_20180827.dbf')
+field_artaxstats <- fieldt[, sapply(.SD, function(x) list(mean=mean(x, na.rm=T),
+                                                          sd=sd(x, na.rm=T),
+                                                          range=max(x,na.rm=TRUE)-min(x,na.rm=TRUE))), by=c('SiteID','Pair'), .SDcols = 29:51]
+setnames(field_artaxstats, c('SiteID', 'Pair', 
+                             paste(rep(colnames(fieldt)[29:51],each=3),
+                                   c('mean', 'sd', 'range'), sep='_')))
+
+#Write out mean values
+field_artaxmean <- field_artaxstats[, .SD, .SDcols = c(1,2, grep('mean', colnames(field_artaxstats)))] 
+write.dbf(field_artaxmean, 'field_artaxmean_20180827.dbf')
 
 #--------------------------------------------------------------------------------------
 #Assess within-tree variability of XRF measurements 
-
-#Format data
-artaxres <- merge(melt(artaxmean, id.vars=c('SiteID','Pair'), variable.name='Elem', value.name='mean'),
-      melt(artaxsd, id.vars=c('SiteID','Pair'), variable.name='Elem', value.name='sd'),
-      by=c('SiteID','Pair','Elem'))
-artaxres$cv <- with(artaxres, sd/mean)
-artaxres <- merge(artaxres, melt(artaxrange, id.vars=c('SiteID', 'Pair'), variable.name='Elem', value.name='range'),
-      by=c('SiteID','Pair','Elem'))
+artaxres <- melt(field_artaxstats, id.vars=c('SiteID','Pair'), variable.name='Elem_stats')
+artaxres[, `:=`(Elem = sub('(.*)[_](.*)', '\\1', Elem_stats),
+                stats = sub('(.*)[_](.*)', '\\2', Elem_stats))] #Replaces the whole match with the first group in the regex pattern
+artaxres <- dcast(artaxres, SiteID+Pair+Elem~stats, value.var = 'value')
+artaxres[, cv := sd/mean]
 artaxres <- merge(artaxres, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
 #Plot coefficient of variation distributions for every element
@@ -114,10 +167,9 @@ ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=mean, y=cv, col
 
 #--------------------------------------------------------------------------------------
 #Assess within-site variability of XRF measurements 
-
-artaxmeansite <- artaxmean[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
-artaxsdsite <- artaxmean[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
-artaxressite <- merge(melt(artaxmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
+field_artaxmeansite <- field_artaxmean[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
+artaxsdsite <- field_artaxmean[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
+artaxressite <- merge(melt(field_artaxmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
                   melt(artaxsdsite, id.vars='SiteID', variable.name='Elem', value.name='sd'),
                   by=c('SiteID','Elem'))
 artaxressite$cv <- with(artaxressite, sd/mean)
@@ -134,13 +186,61 @@ ggplot(artaxressite[!(artaxressite$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fil
         axis.line = element_line(color='black'))
 
 #--------------------------------------------------------------------------------------
+# Check whether tree species mattered at all
+
+#--------------------------------------------------------------------------------------
+#Relate XRF field data to ICP results
+
+#Format data 
+ICPdat[ICPdat == 'TR'] <- 0
+ICPdat[ICPdat == 'ND'] <- 0
+ICPdat <- setDT(ICPdat)[!(SAMPLE.SET %in% c('BLK', 'QC-1', NA)),]
+ICPdat <- ICPdat[, lapply(.SD, as.character), by=SAMPLE.SET]
+ICPdat <- ICPdat[, lapply(.SD, as.numeric), by=SAMPLE.SET]
+
+#Set aside and compute mean over duplicate measurements
+ICPdup <- ICPdat[substr(ICPdat$SAMPLE.SET, 1,3) %in% substr(grep('DUP', ICPdat$SAMPLE.SET, value=T), 1,3),]
+ICPdat[, SAMPLE.SET := substr(SAMPLE.SET, 1,3)] 
+ICPmean <- ICPdat[, lapply(.SD, mean), by= SAMPLE.SET]
+
+#Melt dataset to merge with XRF data
+ICPmelt <- melt(setDT(ICPdat), id.vars = 'SAMPLE.SET', variable.name = 'Elem', value.name = 'ICP')
+ICPmelt[, `:=`(SiteID = gsub('[A-Z]', '', SAMPLE.SET),
+               Pair = gsub('[0-9]', '', SAMPLE.SET))]
+
+#Merge with XRF data
+ICPmerge <- ICPmelt[artaxres, on = .(SiteID, Pair, Elem)]
+unique(ICPmelt$Elem)[!(unique(ICPmelt$Elem) %in% unique(artaxres$Elem))]
+unique(artaxres$Elem)[!(unique(artaxres$Elem) %in% unique(ICPmelt$Elem))]
+
+#Plot comparison
+ICPfield_plot <- ggplot(ICPmerge[!is.na(ICP),], aes(x=mean, y=ICP, label=SiteID)) + 
+  geom_point() + 
+  geom_smooth(span=0.9) +
+  facet_wrap(~Elem, scales='free') +
+  theme_classic()
+
+plotly_json(ICPfield_plot)
+ggplotly(ICPfield_plot) %>%
+  style(hoverinfo = "none", traces = 15:42)
+
+ICPmerge[!is.na(ICP),round(summary(lm(ICP~mean))$adj.r.squared, 2), by=Elem]
+
+#--------------------------------------------------------------------------------------
+#Relate XRF field data to XRF lab data
+
+
+#Bayesian deconvolution of 7A2 matches a lot better
+
+
+#--------------------------------------------------------------------------------------
 #Relate XRF data to pollution predictors 
 
 #Import shapefile of sites
 colnames(trees@data)[1] <- 'SiteID'
 
 #Join field data to site shapefile
-treesxrf <- merge(trees, artaxmean, by=c('SiteID','Pair'))
+treesxrf <- merge(trees, field_artaxmean, by=c('SiteID','Pair'))
 treesxrf <- treesxrf[!is.na(treesxrf$Fe) | treesxrf$SiteID==1,]
 
 #Project site shapefile to same coordinate system as predictors
@@ -157,18 +257,18 @@ treesxrf[is.na(treesxrf$bing),'bing'] <- 0
 
 #Format data
 treesxrf <- treesxrf[as.numeric(as.character(treesxrf$SiteID)) < 52,]
-#metal_select <- c('Br','Co','Cr','Cu','Fe','Mn','Ni','Pb','Sr','Ti','V','Zn')
+metal_select <- c('Br','Co','Cr','Cu','Fe','Mn','Ni','Pb','Sr','Ti','V','Zn')
 #metal_select <- c('Fe','Zn','Co','Cr') #for Phil 2018/10/02 'goodresults'
-metal_select <- c('Ca','K','Sr','P') #for Phil 2018/10/02 'randomresults'
+#metal_select <- c('Ca','K','Sr','P') #for Phil 2018/10/02 'randomresults'
 
-treesxrf_melt <- melt(treesxrf@data, id.vars=colnames(treesxrf@data)[!(colnames(treesxrf@data) %in% metal_select)])
-treesxrf_melt <- merge(treesxrf_melt, periodicTable[,c('symb','name')], by.x='variable', by.y='symb')
+treesxrf_melt <- melt(treesxrf@data, id.vars=colnames(treesxrf@data)[!(colnames(treesxrf@data) %in% metal_select)], variable.name = 'Elem')
+treesxrf_melt <- merge(treesxrf_melt, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
 #Check distribution of aadt, bing, and spdlm indices
 qplot(sqrt(treesxrf$AADT))
 qplot(sqrt(treesxrf$spdlm))
 qplot(sqrt(treesxrf$bing))
-setDT(treesxrf_melt)[,valuestand := (value-min(value, na.rm=T))/(max(value)-min(value)), by=variable]
+setDT(treesxrf_melt)[,valuestand := (value-min(value, na.rm=T))/(max(value)-min(value)), by=Elem]
 
 rPal <- colorRampPalette(c('#fff5f0','#cb181d'))
 bPal <- colorRampPalette(c('#deebf7','#2171b5'))
@@ -199,14 +299,14 @@ bing_xrf <- ggplot(treesxrf_melt, aes(x=bing, y=as.numeric(as.character(valuefac
   labs(x='Traffic congestion (Bing index)', y='Concentration in moss (normalized photon count)') + 
   facet_wrap(~name, nrow=3, scales='free_y') +
   geom_smooth(method='lm', se = T, color='black') + 
-  # stat_poly_eq(aes(label = paste(..rr.label..)), 
-  #              label.x.npc = "right", label.y.npc = 0.02,
-  #              formula = y ~ x, parse = TRUE, size = 5)+
-  # stat_fit_glance(method = 'lm',
-  #                 method.args = list(formula = y ~ x),
-  #                 geom = 'text',
-  #                 aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
-  #                 label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  stat_poly_eq(aes(label = paste(..rr.label..)),
+               label.x.npc = "right", label.y.npc = 0.02,
+               formula = y ~ x, parse = TRUE, size = 5)+
+  stat_fit_glance(method = 'lm',
+                  method.args = list(formula = y ~ x),
+                  geom = 'text',
+                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
   theme_classic() + 
   theme(legend.position = 'none', 
         axis.text = element_blank(), 
@@ -273,22 +373,76 @@ summary(Pblm)
 qplot(x=predict(Pblm), y=treesxrf$Pb) + geom_smooth(method='lm')
 
 #--------------------------------------------------------------------------------------
+# Relate ICP data to pollution predictors 
+treesICP <- setDT(treesxrf_melt)[ICPmelt, on=.(SiteID, Pair, Elem)]
+
+#
+ggplot(treesICP, aes(x=bing, y=ICP)) + 
+  geom_point() + 
+  labs(x='Speed limit index', y='Concentration (ug/g)') + 
+  facet_wrap(~name, nrow=3, scales='free_y') +
+  geom_smooth(method='lm', formula = y ~ x, se = T) + 
+  stat_poly_eq(aes(label = paste(..rr.label..)), 
+               label.x.npc = "right", label.y.npc = 0.02,
+               formula = y ~ x, parse = TRUE, size = 3)+
+  stat_fit_glance(method = 'lm',
+                  method.args = list(formula = y ~ x),
+                  geom = 'text',
+                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  theme_classic()
+
+
+#Speed limit
+ggplot(treesICP, aes(x=spdlm, y=ICP)) + 
+  geom_point() + 
+  labs(x='Speed limit index', y='Concentration (ug/g)') + 
+  facet_wrap(~name, nrow=3, scales='free_y') +
+  geom_smooth(method='lm', formula = y ~ x, se = T) + 
+  stat_poly_eq(aes(label = paste(..rr.label..)), 
+               label.x.npc = "right", label.y.npc = 0.02,
+               formula = y ~ x, parse = TRUE, size = 3)+
+  stat_fit_glance(method = 'lm',
+                  method.args = list(formula = y ~ x),
+                  geom = 'text',
+                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  theme_classic()
+
+#Traffic volume
+ggplot(treesICP, aes(x=AADT, y=ICP)) + 
+  geom_point() + 
+  labs(x='Traffic volume index', y='Photon count (normalized)') + 
+  facet_wrap(~name, nrow=3, scales='free_y') +
+  geom_smooth(method='lm', formula = y ~ x, se = T) + 
+  stat_poly_eq(aes(label = paste(..rr.label..)), 
+               label.x.npc = "right", label.y.npc = 0.02,
+               formula = y ~ x, parse = TRUE, size = 3)+
+  stat_fit_glance(method = 'lm',
+                  method.args = list(formula = y ~ x),
+                  geom = 'text',
+                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  theme_classic()
+
+
+#--------------------------------------------------------------------------------------
 # Output overall variability table 
-elemvar <- data.frame(Elem=colnames(deconvrescastnorm[,-1]),
-                      mean=colMeans(deconvrescastnorm[,-1]),
-                      min =t(setDT(deconvrescastnorm[,-1])[ , lapply(.SD, min)]),
-                      max =t(setDT(deconvrescastnorm[,-1])[ , lapply(.SD, max)]),
-                      sd= t(setDT(deconvrescastnorm[,-1])[ , lapply(.SD, sd)]))
+elemvar <- data.frame(Elem=colnames(fieldrescastnorm[,-1]),
+                      mean=colMeans(fieldrescastnorm[,-1]),
+                      min =t(setDT(fieldrescastnorm[,-1])[ , lapply(.SD, min)]),
+                      max =t(setDT(fieldrescastnorm[,-1])[ , lapply(.SD, max)]),
+                      sd= t(setDT(fieldrescastnorm[,-1])[ , lapply(.SD, sd)]))
 
 #Generate table of statistics
-df$SiteIDPair <- with(df, paste0(SiteID,Pair))
-allelem <- colnames(df) %in% periodicTable$symb #Get all column which correspond to an element in the periodic table
+dt$SiteIDPair <- with(dt, paste0(SiteID,Pair))
+allelem <- colnames(dt) %in% periodicTable$symb #Get all column which correspond to an element in the periodic table
 #Apply to each element:
-elemwise_comps <- sapply(colnames(df)[allelem], function(x) {
+elemwise_comps <- sapply(colnames(dt)[allelem], function(x) {
   #Analyze error within tree samples
-  withintree <- summary(aov(as.formula(paste(x, "~SiteIDPair")), data=df))  
+  withintree <- summary(aov(as.formula(paste(x, "~SiteIDPair")), data=dt))  
   #Analyze error among tree samples within sites
-  withinsite <- summary(aov(as.formula(paste(x, "~SiteID")), data=df)) 
+  withinsite <- summary(aov(as.formula(paste(x, "~SiteID")), data=dt)) 
   #Regress pollutant predictors against XRF data for each element
   bing_lm <- summary(lm(as.formula(paste(x, "~bing")), data=treesxrf))
   aadt_lm <- summary(lm(as.formula(paste(x, "~sqrt(AADT)")), data=treesxrf))
