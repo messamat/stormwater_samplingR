@@ -48,14 +48,14 @@ vispal <- function(dat) {
 # Import data 
 
 #Import and format field data 
-fielddata <- read.csv(file.path(datadir,"field_data/field_data_raw_20180808_edit.csv"))
-colnames(fielddata)[1] <- 'SiteID'
-fielddata$SiteID <- as.character(fielddata$SiteID)
-sel <- fielddata[!is.na(fielddata$XRFmin) & !is.na(fielddata$SiteID),]
+fieldata <- read.csv(file.path(datadir,"field_data/field_data_raw_20180808_edit.csv"))
+colnames(fieldata)[1] <- 'SiteID'
+fieldata$SiteID <- as.character(fieldata$SiteID)
+fieldata_sel <- fielddata[!is.na(fieldata$XRFmin) & !is.na(fieldata$SiteID),]
 fieldata_format <- data.frame()
-for (row in seq(1,nrow(sel))) {
-  extract <- sel[row,]
-  for (xrf in seq(sel[row,'XRFmin'], sel[row,'XRFmax'])){
+for (row in seq(1,nrow(fieldata_sel))) {
+  extract <- fielddata_sel[row,]
+  for (xrf in seq(fieldata_sel[row,'XRFmin'], fieldata_sel[row,'XRFmax'])){
     #print(xrf)
     extract$XRFID <- xrf
     fieldata_format <- rbind(fieldata_format, extract)
@@ -119,9 +119,9 @@ labrescastnorm <- labrescast[, lapply(.SD, function(x) {x/Rh}), by = .(SiteID, P
   
 #Merge datasets
 fieldt <- setDT(fieldata_format)[fieldrescastnorm, on='XRFID']
-labdt <- setDT(fieldata_format)[labrescastnorm, on =  .(SiteID, Pair)]
+labdt <- setDT(fieldata_sel)[labrescastnorm, on =  .(SiteID, Pair)]
 
-#Compute average
+#Compute average, sd, and range, then melt XRF field data
 field_artaxstats <- fieldt[, sapply(.SD, function(x) list(mean=mean(x, na.rm=T),
                                                           sd=sd(x, na.rm=T),
                                                           range=max(x,na.rm=TRUE)-min(x,na.rm=TRUE))), by=c('SiteID','Pair'), .SDcols = 29:51]
@@ -129,24 +129,32 @@ setnames(field_artaxstats, c('SiteID', 'Pair',
                              paste(rep(colnames(fieldt)[29:51],each=3),
                                    c('mean', 'sd', 'range'), sep='_')))
 
-#Write out mean values
+fieldres_format <- melt(field_artaxstats, id.vars=c('SiteID','Pair'), variable.name='Elem_stats')
+fieldres_format[, `:=`(Elem = sub('(.*)[_](.*)', '\\1', Elem_stats),
+                       stats = sub('(.*)[_](.*)', '\\2', Elem_stats))] #Replaces the whole match with the first group in the regex pattern
+fieldres_format <- dcast(fieldres_format, SiteID+Pair+Elem~stats, value.var = 'value')
+fieldres_format[, cv := sd/mean]
+fieldres_format <- merge(fieldres_format, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
+
+#Melt XRF lab data
+labres_format <- melt(labdt[, colnames(labdt) %in% c('SiteID', 'Pair', periodicTable$symb), with=F], 
+                      id.vars=c('SiteID','Pair'), variable.name='Elem')
+labres_format <- merge(labres_format, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
+
+
+#Write out mean field XRF values
 field_artaxmean <- field_artaxstats[, .SD, .SDcols = c(1,2, grep('mean', colnames(field_artaxstats)))] 
 write.dbf(field_artaxmean, 'field_artaxmean_20180827.dbf')
 
 #--------------------------------------------------------------------------------------
-#Assess within-tree variability of XRF measurements 
-artaxres <- melt(field_artaxstats, id.vars=c('SiteID','Pair'), variable.name='Elem_stats')
-artaxres[, `:=`(Elem = sub('(.*)[_](.*)', '\\1', Elem_stats),
-                stats = sub('(.*)[_](.*)', '\\2', Elem_stats))] #Replaces the whole match with the first group in the regex pattern
-artaxres <- dcast(artaxres, SiteID+Pair+Elem~stats, value.var = 'value')
-artaxres[, cv := sd/mean]
-artaxres <- merge(artaxres, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
+#Assess within-tree variability of XRF field measurements 
+
 
 #Plot coefficient of variation distributions for every element
-cvmean_label <- as.data.frame(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),
+cvmean_label <- as.data.frame(fieldres_format[!(fieldres_format$Elem %in% c('Rh','Pd','Ar')),
                                        paste0('Mean CV: ',format(mean(cv),digits=2)),
                                        by=name])
-ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
+ggplot(fieldres_format[!(fieldres_format$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
   geom_density()+
   labs(x='Coefficient of variation', y='Count') + 
   facet_wrap(~name) + 
@@ -157,7 +165,7 @@ ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name))
         strip.text = element_text(size=14))
 
 #Plot relationship between elemental concentration and cv
-ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=mean, y=cv, color=name)) + 
+ggplot(fieldres_format[!(fieldres_format$Elem %in% c('Rh','Pd','Ar')),], aes(x=mean, y=cv, color=name)) + 
   geom_point()+
   labs(x='Mean photon count (normalized)', y='Coefficient of variation') + 
   facet_wrap(~name, scales='free') +
@@ -166,16 +174,16 @@ ggplot(artaxres[!(artaxres$Elem %in% c('Rh','Pd','Ar')),], aes(x=mean, y=cv, col
         strip.text = element_text(size=14))
 
 #--------------------------------------------------------------------------------------
-#Assess within-site variability of XRF measurements 
-field_artaxmeansite <- field_artaxmean[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
-artaxsdsite <- field_artaxmean[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=3:25]
-artaxressite <- merge(melt(field_artaxmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
+#Assess within-site variability of XRF field and lab measurements 
+field_artaxmeansite <- fieldt[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=29:51]
+artaxsdsite <- fieldt[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=29:51]
+fieldres_formatsite <- merge(melt(field_artaxmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
                   melt(artaxsdsite, id.vars='SiteID', variable.name='Elem', value.name='sd'),
                   by=c('SiteID','Elem'))
-artaxressite$cv <- with(artaxressite, sd/mean)
-artaxressite <- merge(artaxressite, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
+fieldres_formatsite$cv <- with(fieldres_formatsite, sd/mean)
+fieldres_formatsite <- merge(fieldres_formatsite, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
-ggplot(artaxressite[!(artaxressite$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
+ggplot(fieldres_formatsite[!(fieldres_formatsite$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
   geom_density()+
   labs(x='Coefficient of variation', y='Count') + 
   facet_wrap(~name) + 
@@ -185,11 +193,13 @@ ggplot(artaxressite[!(artaxressite$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fil
         panel.border = element_blank(),
         axis.line = element_line(color='black'))
 
+################# ADD same for XRF lab measurements
+
 #--------------------------------------------------------------------------------------
 # Check whether tree species mattered at all
 
 #--------------------------------------------------------------------------------------
-#Relate XRF field data to ICP results
+#Relate XRF data to ICP results
 
 #Format data 
 ICPdat[ICPdat == 'TR'] <- 0
@@ -208,23 +218,47 @@ ICPmelt <- melt(setDT(ICPdat), id.vars = 'SAMPLE.SET', variable.name = 'Elem', v
 ICPmelt[, `:=`(SiteID = gsub('[A-Z]', '', SAMPLE.SET),
                Pair = gsub('[0-9]', '', SAMPLE.SET))]
 
-#Merge with XRF data
-ICPmerge <- ICPmelt[artaxres, on = .(SiteID, Pair, Elem)]
-unique(ICPmelt$Elem)[!(unique(ICPmelt$Elem) %in% unique(artaxres$Elem))]
-unique(artaxres$Elem)[!(unique(artaxres$Elem) %in% unique(ICPmelt$Elem))]
+#----
+#Relate XRF field data to ICP results
+#----
+#Merge with XRF field data
+ICPfieldmerge <- ICPmelt[fieldres_format, on = .(SiteID, Pair, Elem)]
+unique(ICPmelt$Elem)[!(unique(ICPmelt$Elem) %in% unique(fieldres_format$Elem))] #Check what elems are in vs out
+unique(fieldres_format$Elem)[!(unique(fieldres_format$Elem) %in% unique(ICPmelt$Elem))] #Check what elems are in vs out
 
 #Plot comparison
-ICPfield_plot <- ggplot(ICPmerge[!is.na(ICP),], aes(x=mean, y=ICP, label=SiteID)) + 
+ICPfield_plot <- ggplot(ICPfieldmerge[!is.na(ICP),], aes(x=mean, y=ICP, label=SiteID)) + 
   geom_point() + 
   geom_smooth(span=0.9) +
   facet_wrap(~Elem, scales='free') +
   theme_classic()
 
-plotly_json(ICPfield_plot)
+#plotly_json(ICPfield_plot)
 ggplotly(ICPfield_plot) %>%
   style(hoverinfo = "none", traces = 15:42)
 
-ICPmerge[!is.na(ICP),round(summary(lm(ICP~mean))$adj.r.squared, 2), by=Elem]
+ICPfieldmerge[!is.na(ICP),round(summary(lm(ICP~mean))$adj.r.squared, 2), by=Elem]
+
+#----
+#Relate XRF lab data to ICP results
+#----
+#Merge with XRF lab data
+ICPlabmerge <- ICPmelt[labres_format, on = .(SiteID, Pair, Elem)]
+unique(ICPmelt$Elem)[!(unique(ICPmelt$Elem) %in% unique(labres_format$Elem))] #Check what elems are in vs out
+unique(labres_format$Elem)[!(unique(labres_format$Elem) %in% unique(ICPmelt$Elem))] #Check what elems are in vs out
+
+#Plot comparison
+ICPlab_plot <- ggplot(ICPlabmerge[!is.na(ICP),], aes(x=value, y=ICP, label=SiteID)) + 
+  geom_point() + 
+  geom_smooth(span=0.9) +
+  facet_wrap(~Elem, scales='free') +
+  theme_classic()
+
+plotly_json(ICPlab_plot)
+ggplotly(ICPlab_plot)%>%
+  style(hoverinfo = "none", traces = 24:62)
+
+ICPlabmerge[!is.na(ICP),round(summary(lm(ICP~value))$adj.r.squared, 2), by=Elem]
 
 #--------------------------------------------------------------------------------------
 #Relate XRF field data to XRF lab data
@@ -371,6 +405,27 @@ qplot(x=predict(Culm), y=treesxrf$Cu) + geom_smooth(method='lm')
 Pblm <- lm(Pb~bing+sqrt(AADT)+spdlm, data=treesxrf)
 summary(Pblm)
 qplot(x=predict(Pblm), y=treesxrf$Pb) + geom_smooth(method='lm')
+
+#--------------------------------------------------------------------------------------
+# Relate lab XRF data to pollution predictors 
+treeslab <- setDT(treesxrf_melt)[labres_format, on=.(SiteID, Pair, Elem)]
+
+binglab<- ggplot(treeslab, aes(x=bing, y=value, label= SiteID)) + 
+  geom_point() + 
+  labs(x='Speed limit index', y='Concentration (ug/g)') + 
+  facet_wrap(~name, nrow=3, scales='free_y') +
+  geom_smooth(method='lm', formula = y ~ x, se = T) + 
+  stat_poly_eq(aes(label = paste(..rr.label..)), 
+               label.x.npc = "right", label.y.npc = 0.02,
+               formula = y ~ x, parse = TRUE, size = 3)+
+  stat_fit_glance(method = 'lm',
+                  method.args = list(formula = y ~ x),
+                  geom = 'text',
+                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  theme_classic()
+
+ggplotly(binglab)
 
 #--------------------------------------------------------------------------------------
 # Relate ICP data to pollution predictors 
