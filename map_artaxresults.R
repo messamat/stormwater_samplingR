@@ -7,6 +7,7 @@ library(foreign)
 library(rgdal)
 library(raster)
 library(ggplot2)
+library(ggstance)
 library(ggpmisc)
 library(PeriodicTable)
 library(kableExtra)
@@ -51,10 +52,10 @@ vispal <- function(dat) {
 fieldata <- read.csv(file.path(datadir,"field_data/field_data_raw_20180808_edit.csv"))
 colnames(fieldata)[1] <- 'SiteID'
 fieldata$SiteID <- as.character(fieldata$SiteID)
-fieldata_sel <- fielddata[!is.na(fieldata$XRFmin) & !is.na(fieldata$SiteID),]
+fieldata_sel <- fieldata[!is.na(fieldata$XRFmin) & !is.na(fieldata$SiteID),]
 fieldata_format <- data.frame()
 for (row in seq(1,nrow(fieldata_sel))) {
-  extract <- fielddata_sel[row,]
+  extract <- fieldata_sel[row,]
   for (xrf in seq(fieldata_sel[row,'XRFmin'], fieldata_sel[row,'XRFmax'])){
     #print(xrf)
     extract$XRFID <- xrf
@@ -63,7 +64,7 @@ for (row in seq(1,nrow(fieldata_sel))) {
 }
 
 #Import and format field XRF deconvolution results
-fieldres <- deconvolution_import(file.path(datadir, 'XRF20181210/PostBrukerCalibration/deconvolutionresults_XRF12_245_20180827'),
+fieldres <- deconvolution_import(file.path(datadir, 'XRF20181210/PostBrukerCalibration/deconvolutionresults_XRF12_245_20181215'),
                                  idstart = 41, idend= 43)
 
 #Import raw XRF lab data
@@ -88,11 +89,13 @@ setDT(labxrf_list)[, `:=`(c_cum_ps = c_cum/duration,
 labxrf_list[c_cum_ps > 90000,][!(labxrf_list[c_cum_ps > 90000, SiteID] %in% problem_recs$SiteID)]
 
 #Import and format lab XRF deconvolution results
-labres <- deconvolution_import(file.path(datadir, 'XRF20181210/PelletMeasurements/deconvolutionresults_labXRF_20181212'),
+labres <- deconvolution_import(file.path(datadir, 'XRF20181210/PelletMeasurements/deconvolutionresults_labXRF_20181215'),
                                idstart = 29, idend= 33)
 #Import ICP-OES data
-ICPdat <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_120618-2_edit20181210.xlsx'), 1)
-ICPthresholds <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_120618-2_edit20181210.xlsx'), 2)
+ICPdat <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_120618-2_edit20181210.xlsx'),
+                    1, stringsAsFactors = F)
+ICPthresholds <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_120618-2_edit20181210.xlsx'),
+                           2, stringsAsFactors = F)
 
 #Import GIS data
 trees <- readOGR(dsn = file.path(datadir, 'field_data'), layer = 'sampling_sites_edit') 
@@ -106,7 +109,9 @@ heat_bing <- raster(file.path(resdir, 'heatbing_int')) #Replace with heatbing_in
 #Cast while summing net photon counts across electron transitions
 fieldrescast <- dcast(setDT(fieldres), XRFID~Element, value.var='Net', fun.aggregate=sum) 
 fieldrescast[, XRFID := as.numeric(gsub('[_]', '', XRFID))]
+fieldrescast[fieldrescast < 0] <- 0
 labrescast <- dcast(setDT(labres), XRFID~Element, value.var='Net', fun.aggregate=sum)
+labrescast[labrescast < 0] <- 0
 #Average lab XRF results over multiple measurements for a given pellet
 labrescast <- labrescast[, `:=`(SiteID = gsub('[A-B].*', '', XRFID),
                                 Pair = gsub('[0-9_]+', '', XRFID),
@@ -124,9 +129,10 @@ labdt <- setDT(fieldata_sel)[labrescastnorm, on =  .(SiteID, Pair)]
 #Compute average, sd, and range, then melt XRF field data
 field_artaxstats <- fieldt[, sapply(.SD, function(x) list(mean=mean(x, na.rm=T),
                                                           sd=sd(x, na.rm=T),
-                                                          range=max(x,na.rm=TRUE)-min(x,na.rm=TRUE))), by=c('SiteID','Pair'), .SDcols = 29:51]
+                                                          range=max(x,na.rm=TRUE)-min(x,na.rm=TRUE))), 
+                           by=c('SiteID','Pair'), .SDcols = 29:57]
 setnames(field_artaxstats, c('SiteID', 'Pair', 
-                             paste(rep(colnames(fieldt)[29:51],each=3),
+                             paste(rep(colnames(fieldt)[29:57],each=3),
                                    c('mean', 'sd', 'range'), sep='_')))
 
 fieldres_format <- melt(field_artaxstats, id.vars=c('SiteID','Pair'), variable.name='Elem_stats')
@@ -144,11 +150,11 @@ labres_format <- merge(labres_format, periodicTable[,c('symb','name')], by.x='El
 
 #Write out mean field XRF values
 field_artaxmean <- field_artaxstats[, .SD, .SDcols = c(1,2, grep('mean', colnames(field_artaxstats)))] 
+colnames(field_artaxmean) <- gsub('_mean', '', colnames(field_artaxmean))
 write.dbf(field_artaxmean, 'field_artaxmean_20180827.dbf')
 
 #--------------------------------------------------------------------------------------
 #Assess within-tree variability of XRF field measurements 
-
 
 #Plot coefficient of variation distributions for every element
 cvmean_label <- as.data.frame(fieldres_format[!(fieldres_format$Elem %in% c('Rh','Pd','Ar')),
@@ -202,8 +208,8 @@ ggplot(fieldres_formatsite[!(fieldres_formatsite$Elem %in% c('Rh','Pd','Ar')),],
 #Relate XRF data to ICP results
 
 #Format data 
-ICPdat[ICPdat == 'TR'] <- 0
-ICPdat[ICPdat == 'ND'] <- 0
+ICPdat[ICPdat == 'TR'] <- '0'
+ICPdat[ICPdat == 'ND'] <- '0'
 ICPdat <- setDT(ICPdat)[!(SAMPLE.SET %in% c('BLK', 'QC-1', NA)),]
 ICPdat <- ICPdat[, lapply(.SD, as.character), by=SAMPLE.SET]
 ICPdat <- ICPdat[, lapply(.SD, as.numeric), by=SAMPLE.SET]
@@ -226,18 +232,47 @@ ICPfieldmerge <- ICPmelt[fieldres_format, on = .(SiteID, Pair, Elem)]
 unique(ICPmelt$Elem)[!(unique(ICPmelt$Elem) %in% unique(fieldres_format$Elem))] #Check what elems are in vs out
 unique(fieldres_format$Elem)[!(unique(fieldres_format$Elem) %in% unique(ICPmelt$Elem))] #Check what elems are in vs out
 
-#Plot comparison
-ICPfield_plot <- ggplot(ICPfieldmerge[!is.na(ICP),], aes(x=mean, y=ICP, label=SiteID)) + 
-  geom_point() + 
-  geom_smooth(span=0.9) +
+#Plot comparison 
+outlier_sites <- c(20, 23, 43, 49, 52, 53, 54, 62) 
+ICPfield_plot <- ggplot(ICPfieldmerge[!(is.na(ICP) | 
+                                          ICPfieldmerge$SiteID %in% outlier_sites | 
+                                          Elem %in% c('Na', 'Si', 'P')
+                                        ),], 
+                        aes(x=mean, y=ICP)) + 
+  geom_point(aes(label = SiteID, color = cv)) +
+  scale_color_distiller(palette= 'Spectral') +
+  geom_smooth() +
+  geom_linerangeh(aes(xmin=mean-sd, xmax=mean+sd)) + 
+  scale_y_continuous(expand=c(0,0), limits=c(0, NA)) +
+  scale_x_continuous(expand=c(0,0), limits=c(0, NA)) +
   facet_wrap(~Elem, scales='free') +
   theme_classic()
-
 #plotly_json(ICPfield_plot)
-ggplotly(ICPfield_plot) %>%
-  style(hoverinfo = "none", traces = 15:42)
+ggplotly(ICPfield_plot)%>%
+  style(hoverinfo = "none", traces = 20:77)
+ICPfieldmerge[!is.na(ICP)& !(SiteID %in% outlier_sites),
+              round(summary(lm(ICP~mean))$adj.r.squared, 2),
+              by=Elem]
+#Think about removing sites with very high sd
 
-ICPfieldmerge[!is.na(ICP),round(summary(lm(ICP~mean))$adj.r.squared, 2), by=Elem]
+#Plot comparison averaging within sites
+ICPfieldmerge_sitemean <- ICPfieldmerge[!is.na(ICP),
+                                        list(ICPmean = mean(ICP, na.rm=T), XRFmean = mean(mean, na.rm=T)),
+                                             .(SiteID, Elem)]
+ICPfield_plot <- ggplot(ICPfieldmerge_sitemean[!(is.na(ICPmean) | Elem %in% c('Na', 'Si', 'P') |
+                                                 SiteID %in% outlier_sites),], 
+                        aes(x=XRFmean, y=ICPmean)) + 
+  geom_point(aes(label = SiteID)) +
+  geom_smooth(method='lm') +
+  facet_wrap(~Elem, scales='free') +
+  scale_y_continuous(expand=c(0,0), limits=c(0, NA)) +
+  scale_x_continuous(expand=c(0,0), limits=c(0, NA)) +
+  theme_classic()
+ggplotly(ICPfield_plot)
+
+ICPfieldmerge_sitemean[!is.na(ICPmean)& !(SiteID %in% outlier_sites),
+              round(summary(lm(ICPmean~XRFmean))$adj.r.squared, 2),
+              by=Elem]
 
 #----
 #Relate XRF lab data to ICP results
@@ -248,24 +283,29 @@ unique(ICPmelt$Elem)[!(unique(ICPmelt$Elem) %in% unique(labres_format$Elem))] #C
 unique(labres_format$Elem)[!(unique(labres_format$Elem) %in% unique(ICPmelt$Elem))] #Check what elems are in vs out
 
 #Plot comparison
-ICPlab_plot <- ggplot(ICPlabmerge[!is.na(ICP),], aes(x=value, y=ICP, label=SiteID)) + 
+ICPlab_plot <- ggplot(ICPlabmerge[!(is.na(ICP) | SiteID %in% c('49', '62')),], aes(x=value, y=ICP, label=SiteID)) + 
   geom_point() + 
   geom_smooth(span=0.9) +
   facet_wrap(~Elem, scales='free') +
   theme_classic()
 
-plotly_json(ICPlab_plot)
+#plotly_json(ICPlab_plot)
 ggplotly(ICPlab_plot)%>%
   style(hoverinfo = "none", traces = 24:62)
 
-ICPlabmerge[!is.na(ICP),round(summary(lm(ICP~value))$adj.r.squared, 2), by=Elem]
+ICPlabmerge[!(is.na(ICP) | SiteID %in% c('49', '62')),
+            round(summary(lm(ICP~value))$adj.r.squared, 2), by=Elem]
 
 #--------------------------------------------------------------------------------------
 #Relate XRF field data to XRF lab data
-
-
-#Bayesian deconvolution of 7A2 matches a lot better
-
+fieldlabmerge <- fieldres_format[labres_format, on = .(SiteID, Pair, Elem)]
+#Plot comparison
+fieldlab_plot <- ggplot(fieldlabmerge, aes(x=mean, y=value, label=SiteID)) + 
+  geom_point() + 
+  geom_smooth(span=0.9) +
+  facet_wrap(~Elem, scales='free') +
+  theme_classic()
+ggplotly(fieldlab_plot)
 
 #--------------------------------------------------------------------------------------
 #Relate XRF data to pollution predictors 
@@ -295,7 +335,9 @@ metal_select <- c('Br','Co','Cr','Cu','Fe','Mn','Ni','Pb','Sr','Ti','V','Zn')
 #metal_select <- c('Fe','Zn','Co','Cr') #for Phil 2018/10/02 'goodresults'
 #metal_select <- c('Ca','K','Sr','P') #for Phil 2018/10/02 'randomresults'
 
-treesxrf_melt <- melt(treesxrf@data, id.vars=colnames(treesxrf@data)[!(colnames(treesxrf@data) %in% metal_select)], variable.name = 'Elem')
+treesxrf_melt <- melt(treesxrf@data, 
+                      id.vars=colnames(treesxrf@data)[!(colnames(treesxrf@data) %in% metal_select)], 
+                      variable.name = 'Elem')
 treesxrf_melt <- merge(treesxrf_melt, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
 #Check distribution of aadt, bing, and spdlm indices
@@ -304,32 +346,30 @@ qplot(sqrt(treesxrf$spdlm))
 qplot(sqrt(treesxrf$bing))
 setDT(treesxrf_melt)[,valuestand := (value-min(value, na.rm=T))/(max(value)-min(value)), by=Elem]
 
+#Create bivariate color palettte
 rPal <- colorRampPalette(c('#fff5f0','#cb181d'))
 bPal <- colorRampPalette(c('#deebf7','#2171b5'))
 treesxrf_melt$valuefact <- factor(treesxrf_melt$valuestand, levels= unique(as.character(treesxrf_melt$valuestand[order(treesxrf_melt$valuestand,
                                                                                                                        treesxrf_melt$bing)])))
-
 col1 <- t(col2rgb(bPal(100)[as.numeric(cut(treesxrf_melt$valuestand,breaks = 100))]))
 colnames(col1) <- paste0(colnames(col1),'_1')
 col2 = t(col2rgb(rPal(100)[as.numeric(cut(treesxrf_melt$bing,breaks = 100))]))
 colnames(col2) <- paste0(colnames(col2),'_2')
 cols <- data.table(cbind(col1, col2))
-
 colsmix <- cols[,mixcolor(0.5, RGB(red_1, green_1,blue_1), RGB(red_2, green_2,blue_2))]
 treesxrf_melt$colsmix <- rgb(colsmix@coords, maxColorValue=255)
-
-
 #colsmix <- factor(colsmix, levels= unique(colsmix[order(treesxrf_melt$valuestand,
 #                                                        treesxrf_melt$bing)]))
-
 vispal(rgb(col1, maxColorValue=255))
 vispal(rgb(col2, maxColorValue=255))
 #vispal(as.character(colsmix))
 
 #Plot Bing Congestion index vs. XRF data
-bing_xrf <- ggplot(treesxrf_melt, aes(x=bing, y=as.numeric(as.character(valuefact)))) + 
-  geom_point(aes(color=colsmix), size=3, alpha=1/4) +
-  scale_color_identity() +
+bing_xrf <- ggplot(treesxrf_melt, aes(x=bing, y=as.numeric(as.character(valuefact)), label = SiteID)) + 
+  # geom_point(aes(color=colsmix), size=3) +
+  # scale_color_identity() +
+  geom_point(aes(color=AADT), size=3) +
+  scale_color_distiller(palette='Spectral') +
   labs(x='Traffic congestion (Bing index)', y='Concentration in moss (normalized photon count)') + 
   facet_wrap(~name, nrow=3, scales='free_y') +
   geom_smooth(method='lm', se = T, color='black') + 
@@ -347,7 +387,7 @@ bing_xrf <- ggplot(treesxrf_melt, aes(x=bing, y=as.numeric(as.character(valuefac
         axis.ticks = element_blank(),
         text = element_text(size=16),
         axis.title = element_blank())
-bing_xrf
+ggplotly(bing_xrf)
 
 
 png(file.path(resdir, 'prelim_badXRFresults.png'), width=8, height=8, units = 'in', res=400)
@@ -389,9 +429,9 @@ ggplot(treesxrf_melt, aes(x=spdlm, y=value)) +
 
 
 #Multiple linear regressions
-Znlm <- lm(Zn~bing+sqrt(AADT), data=treesxrf)
+Znlm <- lm(Zn~bing*sqrt(AADT), data=treesxrf) #[treesxrf$SiteID != '51',]
 summary(Znlm)
-qplot(x=predict(Znlm), y=treesxrf$Zn) + geom_smooth(method='lm') 
+ggplotly(qplot(x=predict(Znlm), y=treesxrf$Zn, label=treesxrf$SiteID) + geom_smooth(method='lm') )
 #+ geom_text(aes(label=treesxrf$SiteID))
 
 Felm <- lm(Fe~bing+sqrt(AADT)+spdlm, data=treesxrf)
@@ -404,16 +444,18 @@ qplot(x=predict(Culm), y=treesxrf$Cu) + geom_smooth(method='lm')
 
 Pblm <- lm(Pb~bing+sqrt(AADT)+spdlm, data=treesxrf)
 summary(Pblm)
-qplot(x=predict(Pblm), y=treesxrf$Pb) + geom_smooth(method='lm')
+ggplotly(qplot(x=predict(Pblm), y=treesxrf$Pb, label=treesxrf$SiteID) + geom_smooth(method='lm'))
 
 #--------------------------------------------------------------------------------------
 # Relate lab XRF data to pollution predictors 
-treeslab <- setDT(treesxrf_melt)[labres_format, on=.(SiteID, Pair, Elem)]
+colstodelete <- colnames(treesxrf_melt) %in% c(periodicTable$symb, 'value', 'valuestand', 'valuefact')
+treeslab <- merge(setDT(treesxrf_melt)[, .SD, .SDcols = !colstodelete], labres_format, by = c('SiteID', 'Pair', 'Elem'))
 
-binglab<- ggplot(treeslab, aes(x=bing, y=value, label= SiteID)) + 
-  geom_point() + 
-  labs(x='Speed limit index', y='Concentration (ug/g)') + 
-  facet_wrap(~name, nrow=3, scales='free_y') +
+binglab<- ggplot(treeslab[SiteID != 49,], aes(x=bing, y=value, label= SiteID)) + 
+  geom_point(aes(color = AADT)) +
+  scale_color_distiller(palette='Spectral') +
+  labs(x='Traffic congestion (bing index)', y='Concentration (ug/g)') + 
+  facet_wrap(~name.x, nrow=3, scales='free_y') +
   geom_smooth(method='lm', formula = y ~ x, se = T) + 
   stat_poly_eq(aes(label = paste(..rr.label..)), 
                label.x.npc = "right", label.y.npc = 0.02,
@@ -424,17 +466,25 @@ binglab<- ggplot(treeslab, aes(x=bing, y=value, label= SiteID)) +
                   aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
                   label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
   theme_classic()
-
 ggplotly(binglab)
+
+Znlm <- lm(value~bing+sqrt(AADT), data=treeslab[Elem=='Zn' & SiteID != 49,]) #[treesxrf$SiteID != '51',]
+summary(Znlm)
+ggplotly(qplot(x=predict(Znlm),
+               y=as.list(treeslab[Elem=='Zn' & SiteID != 49,])$value, 
+               label=as.list(treeslab[Elem=='Zn' & SiteID != 49,])$SiteID) + geom_smooth(method='lm') )
+
+
 
 #--------------------------------------------------------------------------------------
 # Relate ICP data to pollution predictors 
-treesICP <- setDT(treesxrf_melt)[ICPmelt, on=.(SiteID, Pair, Elem)]
+treesICP <- merge(setDT(treesxrf_melt)[, .SD, .SDcols = !colstodelete], ICPmelt, by = c('SiteID', 'Pair', 'Elem'))
 
 #
-ggplot(treesICP, aes(x=bing, y=ICP)) + 
-  geom_point() + 
-  labs(x='Speed limit index', y='Concentration (ug/g)') + 
+bingICP<- ggplot(treesICP, aes(x=bing, y=ICP, label = paste(SiteID, Pair))) + 
+  geom_point(aes(color=AADT)) +
+  scale_color_distiller(palette='Spectral') +
+  labs(x='Traffic congestion (bing index)', y='Concentration (ug/g)') + 
   facet_wrap(~name, nrow=3, scales='free_y') +
   geom_smooth(method='lm', formula = y ~ x, se = T) + 
   stat_poly_eq(aes(label = paste(..rr.label..)), 
@@ -446,7 +496,7 @@ ggplot(treesICP, aes(x=bing, y=ICP)) +
                   aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
                   label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
   theme_classic()
-
+ggplotly(bingICP)
 
 #Speed limit
 ggplot(treesICP, aes(x=spdlm, y=ICP)) + 
@@ -479,6 +529,12 @@ ggplot(treesICP, aes(x=AADT, y=ICP)) +
                   aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
                   label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
   theme_classic()
+
+Znlm <- lm(ICP~bing+sqrt(AADT), data=treesICP[Elem=='Zn' & SiteID != 49,]) #[treesxrf$SiteID != '51',]
+summary(Znlm)
+ggplotly(qplot(x=predict(Znlm),
+               y=as.list(treesICP[Elem=='Zn' & SiteID != 49,])$ICP, 
+               label=as.list(treesICP[Elem=='Zn' & SiteID != 49,])$SiteID) + geom_smooth(method='lm') )
 
 
 #--------------------------------------------------------------------------------------
@@ -535,6 +591,26 @@ elemvar[order(-elemvar$bing_r2),] %>%
 #%>%
 #  save_kable(file.path(resdir, 'XRFrestab_20180828.doc'), self_contained=T)
 
-#------------- Develop multilinear bayesian Kriging model  --------------------
+#To do: 
+# Go through the location of every sampling site and make sure it's accurate
+# Add drivers: land use, bus routes, 
+# Create heatmaps with difference shapes of kernels and different distances. Test them to see which one works best. 
+# Think of adding elevation data when running the kernels, could then use it as a sort of cost surface
+# Check data for unrealistic values, consider removal. Compute average distance of each sample to all other samples.
+# Transform and standardize data
+# Create summary table of R2, AIC, RMSE for different simple linear and multiple linear regression
+# Create finalized interactive plots for all elements
+# Analyze elements with CPA 
+# Analyze drivers with CPA 
+# Relate how different clusters of chemical elements are related to different drivers
+# Test influence of method by making models testing residuals against weather, moss cleaner, 
+#     duration between collection and cleaning, duration between cleaning and drying, 
+#     duration of drying, duration between drying and processing
+# More multivariate analysis: 
+#   cluster analysis of sites based on pollution
+#   think of the best way to model multivariate pollution that includes both categorical and quantitative variables
+# Develop Kriging model
+# Go back to the field to test
+
 
 
