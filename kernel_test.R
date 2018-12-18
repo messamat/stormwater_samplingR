@@ -3,6 +3,11 @@
 # Purpose: Visualize and create weighted kernels to create traffic-related pollution heatmaps using ArcMap Focal Statistics tool 
 # Link to Arcmap tool: http://desktop.arcgis.com/en/arcmap/10.3/tools/spatial-analyst-toolbox/focal-statistics.htm
 
+library(raster)
+library(plyr)
+library(ggplot2)
+library(data.table)
+
 #### ------ Get example traffic map to get resolution from ----- #####
 res <- 'F:/Levin_Lab/stormwater/results/bing'
 reclassmlc <- file.path(res,"bingmeanod")
@@ -29,12 +34,12 @@ weightedkernel <- function(raster_file, maxdist, shape, p, outkernel) {
   #Compute relative pollution index
   if (shape=='linear')   matrix_weight <- 1-(matrix_dist/maxdist)
   if (shape=='power')  {
-    print('power')
+    #print('power')
     pow <- 1/p
     matrix_weight <- 1-(matrix_dist^pow / maxdist^pow)
   } 
   if (shape=='log') {
-    print('log')
+    #print('log')
     matrix_weight <- 1-(log(matrix_dist+1) / log(maxdist+1))
   }
   if (shape=='quartic_kernel') { #Check this https://gis.stackexchange.com/questions/32300/what-type-of-kernel-density-function-does-arcmap-use
@@ -42,7 +47,7 @@ weightedkernel <- function(raster_file, maxdist, shape, p, outkernel) {
   }
   
   #Make sure that all values are >= 0
-  matrix_weight[matrix_dist>dist] <- 0
+  matrix_weight[matrix_dist>maxdist] <- 0
   #Create kernel header for ArcMap
   matrix_weight <- rbind(c(rad * 2 + 1, rad * 2 + 1, rep(NA, rad*2-1)),
                          matrix_weight)
@@ -59,15 +64,13 @@ for (i in distlist) {
   weightedkernel(reclassmlc, i, 'log', outkernel=logout)
   for (j in powlist) {
     powout <- file.path(res, paste0('kernel_pow', i, '_', j, '.txt'))
+    print(powout)
     weightedkernel(reclassmlc, i, 'power', p = j,  outkernel=powout)
   }
 }
 
 
 #### ------ Visualize all kernels in 2-D space ----- #####
-library(ggplot2)
-library(data.table)
-
 #Create distance values for all kernel sizes and powers
 x <- ldply(distlist, function(x) {
   seql <- seq(-x,x)
