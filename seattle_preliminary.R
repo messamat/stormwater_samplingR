@@ -242,28 +242,3 @@ ggplot(treesel, aes(x=bing_bin, y=AADT_bin, color=factor(spdlm_bin))) +
 
 save.image(paste0('random_sampling', Sys.Date()))
 write.csv(treesel[!is.na(treesel$tosample),], 'preliminary_tree_sample_20180730.csv', row.names=F)
-
-#######################################################################################
-# Analyze how functional class relates to AADT and Speed limit
-#http://streetsillustrated.seattle.gov/street-types/street-classification/
-
-str(streets)
-#Order factors
-streets$ARTDESCRIP <- factor(streets$ARTDESCRIP, 
-                             levels=c('Not Designated', 'Collector Arterial','Minor Arterial', 'Principal Arterial', 'State Route/Freeway','Interstate/Freeway'))
-
-#Arterial classification only slightly discriminate among speed limits
-ggplot(streets[!(streets$ARTDESCRIP %in% c('County Arterial', NA)),], aes(x=SPEEDLIMIT, fill=ARTDESCRIP)) + 
-  geom_histogram()+
-  facet_wrap(~ARTDESCRIP, scales='free_y', ncol=1) +
-  theme_bw()
-
-ggplot(streets[!(streets$ARTDESCRIP %in% c('County Arterial', NA)),], aes(x=ARTDESCRIP, y=SPEEDLIMIT, fill=ARTDESCRIP)) + 
-  geom_boxplot() +
-  theme_classic()
-
-#Arterial classification moderately discriminates among AADT levels
-ggplot(streets[!(streets$ARTDESCRIP %in% c('County Arterial', NA)),], aes(x=ARTDESCRIP, y=AADT_inter, fill=ARTDESCRIP)) + 
-  geom_boxplot() + 
-  scale_y_log10() + 
-  theme_classic()
