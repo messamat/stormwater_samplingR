@@ -71,25 +71,34 @@ transformTukey_lambda <- function (x,start = -2, end = 2, int = 0.025, rastertab
       lambda_iter[iter] <- getlambda(x=xsamp)
       lambda <- mean(lambda_iter)
     }
-  } else{ #Otherwise
-    if (nrow(x)<=5000) { 
-      lambda <- getlambda(x=x$Value)
+    if (lambda > 0) {
+      TRANS = x$Value^lambda
+    }
+    if (lambda == 0) {
+      TRANS = log(x$Value)
+    }
+    if (lambda < 0) {
+      TRANS = -1 * x$Value^lambda
+    }
+  } else{ #If processing a vector
+    if (length(x)<=5000) { 
+      lambda <- getlambda(x=x)
     } else {
       for (iter in 1:rep) {
-        xsamp <- sample(x$Value, size=5000)
+        xsamp <- sample(x, size=5000)
         lambda_iter[iter] <- getlambda(x=xsamp)
         lambda <- mean(lambda_iter)
       }
     }
-  }
-  if (lambda > 0) {
-    TRANS = x$Value^lambda
-  }
-  if (lambda == 0) {
-    TRANS = log(x$Value)
-  }
-  if (lambda < 0) {
-    TRANS = -1 * x$Value^lambda
+    if (lambda > 0) {
+      TRANS = x^lambda
+    }
+    if (lambda == 0) {
+      TRANS = log(xValue)
+    }
+    if (lambda < 0) {
+      TRANS = -1 * x^lambda
+    }
   }
   return(list(TRANS,lambda))
 }
