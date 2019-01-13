@@ -1,3 +1,12 @@
+#Notes:
+# think about using GLMs rather than Multiple Linear Regressions to avoid transforming the response variable?
+# check residuals for homogeneity of variance
+# think how to deal with spatial autocollinearity? (2_d smoother of coordinates?)
+# Univariate: Cook's distance, Lund's test, mvoutlier corr.plot 
+# Look at potential outliers spatially
+# Check collinearity among pollution variables and among elements
+# Could also use OutliersO3 package (https://blog.revolutionanalytics.com/2018/03/outliers.html)
+
 #---- Import libraries ----
 #options(warn=-1)
 library(rprojroot)
@@ -12,6 +21,9 @@ library(raster)
 library(ggplot2)
 library(ggstance)
 library(ggpmisc)
+library(gginnards)
+library(grid)
+library(gridExtra)
 library(PeriodicTable)
 library(kableExtra)
 library(dplyr)
@@ -22,6 +34,7 @@ library(listviewer)
 library(mvoutlier)
 library(rrcov)
 library(vegan)
+library(olsrr) #https://cran.r-project.org/web/packages/olsrr/vignettes/intro.html
 data(periodicTable)
 
 #---- Define directory structure ----
@@ -81,6 +94,89 @@ shapiro_test_df <- function(df, bonf= F, alpha= 0.05) {
                              "Shapiro-Wilks test without Bonferroni Correction")))
 }
 
+ols_plot_dfbetas_custom <- function(model) {
+  #Custom adaptation of ols_plot_dfbetas: just returns ggplots instead of grobs
+  obs <- NULL
+  txt <- NULL
+  dfb <- dfbetas(model)
+  n <- nrow(dfb)
+  np <- ncol(dfb)
+  threshold <- 2/sqrt(n)
+  myplots <- list()
+  outliers <- list()
+  for (i in seq_len(np)) {
+    dbetas <- dfb[, i]
+    df_data <- tibble(obs = seq_len(n), dbetas = dbetas)
+    d <- ols_prep_dfbeta_data(df_data, threshold)
+    f <- ols_prep_dfbeta_outliers(d)
+    p <- eval(substitute(ggplot(d, aes(x = obs, y = dbetas, 
+                                       label = txt, ymin = 0, ymax = dbetas)) + geom_linerange(colour = "blue") + 
+                           geom_hline(yintercept = c(0, threshold, -threshold), 
+                                      colour = "red") + geom_point(colour = "blue", 
+                                                                   shape = 1) + xlab("Observation") + ylab("DFBETAS") + 
+                           ggtitle(paste("Influence Diagnostics for", colnames(dfb)[i])) + 
+                           geom_text(hjust = -0.2, nudge_x = 0.15, size = 2, 
+                                     family = "serif", fontface = "italic", colour = "darkred", 
+                                     na.rm = TRUE) + annotate("text", x = Inf, y = Inf, 
+                                                              hjust = 1.5, vjust = 2, family = "serif", fontface = "italic", 
+                                                              colour = "darkred", label = paste("Threshold:", round(threshold, 
+                                                                                                                    2))), list(i = i)))
+    myplots[[i]] <- p
+    outliers[[i]] <- f
+  }
+  return(list(plots=myplots, outliers=outliers))
+}
+
+regdiagnostic_custom <- function(model, df, chem, flagcol) {
+  "Set of diagnostic tests and plots to detect influential and outlying points.
+  Note: modifies df in place by adding flags based on test results"
+  df <- ICPfieldmerge
+  k <- ols_prep_cdplot_data(model)
+  d <- ols_prep_outlier_obs(k)
+  df[which(df$Elem == chem)[as.data.table(d)[color=='outlier', obs]],
+     (flagcol) := get(flagcol) + 1]
+  cooksdchart <- ols_plot_cooksd_chart(model)$plot %>%
+    delete_layers("GeomText") +
+    geom_text(aes(label=df[Elem == chem, paste0(SiteID, Pair)]), size=4) + 
+    theme_classic()
+  
+  #DFBETA (from ols_plot_dfbetas)
+  dfbeta_mean <- ols_plot_dfbetas_custom(model)$plots[[1]] %>%
+    delete_layers("GeomText") +
+    geom_text(aes(label=df[Elem == chem, paste0(SiteID, Pair)]), size=4) + 
+    theme_classic()
+  dfbeta_int <- ols_plot_dfbetas_custom(model)$plots[[2]] %>%
+    delete_layers("GeomText") +
+    geom_text(aes(label=df[Elem == chem, paste0(SiteID, Pair)]), size=4) + 
+    theme_classic()
+  
+  outliernums <- unique(bind_rows(ols_plot_dfbetas_custom(model)$outliers)$obs)
+  df[which(df$Elem == chem)[outliernums], (flagcol) := get(flagcol) +1]
+  
+  #Externaly deleted studentized residuals vs. leverage
+  residlevplot <- ols_plot_resid_lev(model)$plot %>%
+    delete_layers("GeomText") +
+    geom_text(aes(label=df[Elem == chem, paste0(SiteID, Pair)]), size=4) + 
+    theme_classic()
+  outliernums <- setDT(ols_plot_resid_lev(model)$plot$data)[color %in% c('outlier', 'outlier & leverage'), obs]
+  df[which(df$Elem == chem)[outliernums], (flagcol) := get(flagcol) +1]
+  
+  #Straight resid
+  residplot <- ols_plot_resid_fit(model) %>%
+    delete_layers("GeomText") +
+    geom_text(aes(label=df[Elem == chem, paste0(SiteID, Pair)]), size=4) + 
+    theme_classic()
+  
+  #Regression with and without outliers plot
+  regoutlier <- ggplot(df[Elem == chem,],
+                       aes(x=mean, y=ICP, label=paste0(SiteID, Pair))) + 
+    geom_text(aes(color=factor(get(flagcol))), size=5) +  
+    geom_smooth(method='lm') + 
+    labs(x = paste0('field XRF', chem), y= paste0('ICP', chem)) + 
+    theme_classic()
+  return(arrangeGrob(regoutlier, residplot, residlevplot, cooksdchart, dfbeta_mean, dfbeta_int))
+}
+
 ############################################################################################################################################
 # Import data 
 ############################################################################################################################################
@@ -135,10 +231,12 @@ ICPthresholds <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_1206
                            2, stringsAsFactors = F)
 
 ########### ---- Import GIS data (including pollution variables) ---- ####
-trees <- as.data.table(readOGR(dsn = file.path(resdir, 'Seattle_sampling.gdb'), layer = 'XRFsites_proj')) 
+trees <- as.data.table(readOGR(dsn = file.path(resdir, 'Seattle_sampling.gdb'), layer = 'XRFsites_proj'))
 #summary(trees)
 heatcols <- colnames(trees)[grep('heat', colnames(trees))]
 trees[, (heatcols) := lapply(.SD, function(x){x[is.na(x)] <- 0; x}), .SDcols = heatcols]
+colnames(trees)[1] <- 'SiteID'
+trees <- trees[!(SiteID %in% c('NA', NA)),]
 
 ########### ---- Define elements associated with car traffic ---- ####
 #Elements present in brake linings and emitted brake dust (from Thorpe et al. 2008)
@@ -326,19 +424,69 @@ ggplot(ICPnorm_join, aes(x=transICP, fill=sig)) +
   theme_classic()
 dev.off()     
 
-# z-standardize by element
-ICPmelt[, transICP:=scale(transICP), by=Elem]
-#Re-cast for multivariate analysis
-ICP_trans <- dcast(ICPmelt, SiteID+Pair~Elem, value.var='transICP')
-
 #As, Cd, Mo, and Se still very far from normality (mostly 0s with a few large values)
 #Cr, Na, Ni. and Pb not great (still non-normal)
 
+# z-standardize by element
+ICPmelt[, transICP:=scale(transICP), by=Elem]
+
+# ---- Re-cast data for multivariate analysis ----
+ICP_trans <- dcast(ICPmelt, SiteID+Pair~Elem, value.var='transICP')
+
+########### ---- Format pollutant data ---- ####
+# ---- Check ICP data distribution by element then transform and standardize ----
+#Use Tukey ladder computation to determine each variable's transformation (only on numeric columns with more than 1 unique observation)
+treesmelt <- melt(trees[!is.na(SiteID),], id.vars=grep('heat', colnames(trees), value=T, invert=T), 
+                   variable.name = 'heatvar' , value.name = 'heatvalue')
+treesmelt[, transheat := transformTukey_lambda(heatvalue, start = -2, end = 2,int = 0.025, 
+                                          rastertab=F,rep=100, verbose = FALSE, 
+                                          statistic = 1)[[1]], by=heatvar]
+#Run a shapiro test on each element
+trees_trans <- dcast(treesmelt, SiteID+Pair~heatvar, value.var = 'transheat') 
+
+normtest <- shapiro_test_df(trees_trans[,sapply(trees_trans, class)=='numeric' &
+                                        sapply(trees_trans, function(x) length(unique(x)))>1, with=F])
+normsig <- data.frame(sig = normtest$significance)
+normsig$heatvar <- row.names(normsig)
+#Plot histogram of transformed data color-coded by whether normally distributed or not
+treesnorm_join <- treesmelt[normsig, on='heatvar']
+png(file.path(inspectdir, paste0('trees_TukeyTransform.png')), width = 20, height=12, units='in', res=300)
+ggplot(treesnorm_join, aes(x=transheat, fill=sig)) + 
+  geom_histogram() + 
+  facet_wrap(~heatvar, scales='free') + 
+  theme_classic()
+dev.off()     
+
+# z-standardize by element
+treesmelt[, transheat:=scale(transheat), by= heatvar]
+
+# ---- Re-cast data for multivariate analysis ----
+trees_trans <- dcast(treesmelt, formula = SiteID+Pair~heatvar,  value.var='transheat')
+
 ########### ---- Merge datasets ---- ####
-#Merge with XRF field data
-ICPfieldmerge <- ICPmelt[fieldXRF_format, on = .(SiteID, Pair, Elem)]
+#Merge XRF field data with ICP data
+ICPfieldmerge <- merge(ICPmelt, fieldXRF_format, by = c('SiteID', 'Pair', 'Elem'), all.x=F, all.y=F)
 unique(ICPmelt$Elem)[!(unique(ICPmelt$Elem) %in% unique(fieldXRF_format$Elem))] #Check what elems are in vs out
 unique(fieldXRF_format$Elem)[!(unique(fieldXRF_format$Elem) %in% unique(ICPmelt$Elem))] #Check what elems are in vs out
+
+#Merge XRF field data with XRF lab data
+joincols <- c('SiteID', 'Pair', 'Elem')
+labfieldmerge <- labXRF_format[fieldXRF_format, on = joincols] %>%
+  .[SiteID != 1,]
+setnames(labfieldmerge, 
+         colnames(labfieldmerge[,-joincols, with=F]),
+         gsub('^(?!i)', 'lab_', colnames(labfieldmerge[,-joincols, with=F]), perl=T))
+setnames(labfieldmerge, 
+         colnames(labfieldmerge[,-joincols, with=F]),
+         gsub('^i[.]', 'field_', colnames(labfieldmerge[,-joincols, with=F]), perl=T))
+
+#Join pollutant data to sites
+trees_fieldxrf <- trees_trans[field_transmean, on=c('SiteID','Pair')][
+  !(is.na(Fe) | SiteID==1),]
+trees_labxrf <- trees_trans[lab_transmean, on=c('SiteID','Pair')][
+  !(is.na(Fe) | SiteID==1),]
+trees_ICP <- trees_trans[ICP_trans, on=c('SiteID', 'Pair')][
+  !(is.na(Fe) | SiteID==1),]
 
 ############################################################################################################################################
 # Inspect data and remove outliers
@@ -436,29 +584,31 @@ for (elem in unique(fieldXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
   dev.off()
 }
 
-# ---- Univariate flag based on within-tree CV for different metals ----
+# ---- Exclude columns that have high within-tree variability or that are unrelated to traffic pollution ----
 fieldXRF_format[, `:=`(meanCV=mean(cv, na.rm=T),
                        sdCV = sd(cv, na.rm=T)), by=Elem]
-CV_flag <- dcast(fieldXRF_format[cv>(meanCV+2*sdCV),], SiteID+Pair~Elem, value.var='cv') 
-NAcount <- function(x) length(which(!is.na(unlist(x))))
-CV_flag[, flag_count := NAcount(.SD)-2, by = seq_len(nrow(CV_flag))]
-ggplot(fieldXRF_format, aes(x=mean, y=cv)) + geom_point() +scale_x_sqrt()
-
-######## ---- Multivariate outlier detection ---- 
-"see https://stats.stackexchange.com/questions/213/what-is-the-best-way-to-identify-outliers-in-multivariate-data 
-for reference discussion as well as https://rpubs.com/Treegonaut/301942
-For other resources, see Research_resources/statistics/outliers"
-
-# ---- Exclude columns that have high within-tree variability or that are unrelated to traffic pollution ----
 excol <- unique(c(fieldXRF_format[meanCV>0.5,unique(Elem)], 
                   fieldXRF_format[!(Elem %in% union(brakelining_elem, tire_elem)),unique(Elem)],
                   'Rh', 'Pd', 'Rb', 'Ag'))
+excol2 <- c('As', 'Cd', 'Mo', 'Na', 'Se', 'Si') #Exclude columns that are very far from being normally distributed (mostly 0s in ICP data)
 
+# ---- Univariate flag based on within-tree CV for metals with CV < 0.5----
+CV_flag <- dcast(fieldXRF_format[cv>(meanCV+2*sdCV),], SiteID+Pair~Elem, value.var='cv') 
+ggplot(fieldXRF_format, aes(x=mean, y=cv)) + geom_point() +scale_x_sqrt()
+NAcount <- function(x) length(which(!is.na(unlist(x))))
+CV_flag[, flag_count := NAcount(.SD)-2,
+        by = seq_len(nrow(CV_flag)), 
+        .SDcols = !(colnames(CV_flag) %in% excol)]
+
+### ---- Multivariate outlier detection ---- 
+"see https://stats.stackexchange.com/questions/213/what-is-the-best-way-to-identify-outliers-in-multivariate-data 
+for reference discussion as well as https://rpubs.com/Treegonaut/301942
+For other resources, see Research_resources/statistics/outliers"
 # ---- Compare classic vs robust Mahalanobis distance ----
-outlierdat <- field_artaxlogmean[,-c('SiteID','Pair', excol), with=F]
+outlierdat <- field_transmean[,-c('SiteID','Pair', excol), with=F]
 par(mfrow=c(1,1))
 distances <- dd.plot(outlierdat, quan=0.90, alpha=0.025)
-outlierdat_dist <- cbind(field_artaxlogmean[,-excol, with=F], as.data.frame(distances))
+outlierdat_dist <- cbind(field_transmean[,-excol, with=F], as.data.frame(distances))
 
 ggplotly(
   ggplot(outlierdat_dist, aes(x=md.cla, y=md.rob, color=outliers, label=paste0(SiteID,Pair))) +
@@ -482,7 +632,7 @@ ggplot(outlierdat_distmelt, aes(x='O', y=value, color=aqplot_outliers)) +
   facet_wrap(~Elem, scales='free') +
   theme_classic()
 
-# ---- Robust PCA with rrcov (see 4.2 p24 of Todorov and Filzmoser 2009) ---- 
+# ---- Check position of multivariate outliers in robust PCA with rrcov (see 4.2 p24 of Todorov and Filzmoser 2009) ---- 
 cols <- colnames(outlierdat_dist)[colnames(outlierdat_dist) %in% periodicTable$symb]
 outlierdat_dist[, (cols) := lapply(.SD, scale), .SDcols=cols]
 
@@ -503,22 +653,25 @@ rpca_load <- as.data.table(rpca$loadings)
 rpca_load <- rpca_load[,(.SD)*rpca$eigenvalues, by = seq_len(nrow(rpca_load))]
 setnames(rpca_load, colnames(rpca_load), paste0(colnames(rpca_load), '_loadings'))
 
-pcs <- c('PC1', 'PC3')
+pcs <- c('PC1', 'PC2')
 ggplot(data=outlier_rpca, aes_string(x=paste0(pcs[1],'_scores'), y=paste0(pcs[2],'_scores'))) + 
   geom_text(aes(color=aqplot_outliers, label=paste0(SiteID, Pair))) +
-  geom_segment(data=rpca_load, x=0, y=0, aes_string(xend=paste0(pcs[1],'_loadings'), yend=paste0(pcs[2],'_loadings')),
+  geom_segment(data=rpca_load, x=0, y=0, 
+               aes_string(xend=paste0(pcs[1],'_loadings'), yend=paste0(pcs[2],'_loadings')),
                arrow = arrow(length = unit(0.1,"cm")))+
   geom_text(data=rpca_load, aes_string(x=paste0(pcs[1],'_loadings'), y=paste0(pcs[2],'_loadings')),label=rownames(rpca$loadings)) +
   theme_classic()
 
+
+### ---- Outliers in relationship between field XRF and (lab XRF | ICP) ----
 # ---- Multivariate relationship to ICP-OES for the purpose of outlier detection ----
   #RDA requirements: Y and X must be centered and Y must be standardized; collinearity among X variables should be reduced prior to RDA
-excol2 <- c('As', 'Cd', 'Mo', 'B', 'Ni', 'Se') #Exclude columns that are very far from being normally distributed (mostly 0s in ICP data)
+
 #Only keep sites and elements that are in both ICP and field XRF
 field_ICP_sites <- do.call(paste0,
-                           c(intersect(ICPdat_format[,c('SiteID','Pair'),with=F], field_artaxlogmean[,c('SiteID','Pair'),with=F])))
-ICPrdaformat <- as.matrix(ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,-c('SiteID','Pair', excol, excol2), with=F])
-XRFrdaformat <- as.matrix(field_artaxlogmean[paste0(SiteID,Pair) %in% field_ICP_sites,-c('SiteID','Pair', excol, excol2), with=F])
+                           c(intersect(ICP_trans[,c('SiteID','Pair'),with=F], field_transmean[,c('SiteID','Pair'),with=F])))
+ICPrdaformat <- as.matrix(ICP_trans[paste0(SiteID,Pair) %in% field_ICP_sites,-c('SiteID','Pair', excol, excol2), with=F])
+XRFrdaformat <- as.matrix(field_transmean[paste0(SiteID,Pair) %in% field_ICP_sites,-c('SiteID','Pair', excol, excol2), with=F])
 
 #Run RDA
 rda_fieldICP<- rda(ICPrdaformat ~ XRFrdaformat, scale=FALSE, na.action = na.fail)
@@ -530,21 +683,21 @@ anova(rda_fieldICP, by='axis') #Check each RDA axis' significance through permut
 plot(rda_fieldICP,choices=c(1,2),display=c('sp','bp'),scaling=1,
      xlim=c(-2, 10), ylim=c(-2, 3))
 text(rda_fieldICP,choices=c(1,2),
-     labels=ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)])
+     labels=ICP_trans[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)])
 
 plot(rda_fieldICP,choices=c(1,3),display=c('sp','bp'),scaling=1,
      xlim=c(-2, 10), ylim=c(-2, 3))
 text(rda_fieldICP,choices=c(1,3),
-     labels=ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)])
+     labels=ICP_trans[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)])
 
 plot(rda_fieldICP,choices=c(2,3),display=c('sp','bp'),scaling=1,
      xlim=c(-2, 10), ylim=c(-2, 3))
 text(rda_fieldICP,choices=c(2,3),
-     labels=ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)])
+     labels=ICP_trans[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)])
 
 #Plot RDA studentized residuals (inspired from ordiresids)
 rda_fitresid <- data.table(
-  SiteIDPair = rep(ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)], ncol(ICPrdaformat)),
+  SiteIDPair = rep(ICP_trans[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)], ncol(ICPrdaformat)),
   elem = rep(colnames(ICPrdaformat), nrow(ICPrdaformat), 'each'),
   fitted = as.vector(sweep(fitted(rda_fieldICP, type = "working"), 2, sigma(rda_fieldICP), "/")),
   residuals = as.vector(rstudent(rda_fieldICP)))
@@ -553,44 +706,135 @@ ggplot(rda_fitresid, aes(x=fitted, y=residuals, label=paste0(SiteIDPair,'-', ele
   geom_text(position=position_jitter(width=1,height=0)) + 
   geom_abline(intercept=c(-2, 2), slope=0)
 
-meanresid <- rda_fitresid[, mean(residuals), by=SiteIDPair]
+fieldICP_rda_resid <- rda_fitresid[, list(fieldICP_rda_resid = mean(residuals)), by=SiteIDPair]
 
 # ---- Multivariate relationship to lab XRF for the purpose of outlier detection ----
-excol2 <- c('As', 'Cd', 'Mo', 'B', 'Ni', 'Se') #Exclude columns that are very far from being normally distributed (mostly 0s in ICP data)
 #Only keep sites and elements that are in both ICP and field XRF
-field_ICP_sites <- do.call(paste0,
-                           c(intersect(ICPdat_format[,c('SiteID','Pair'),with=F], field_artaxlogmean[,c('SiteID','Pair'),with=F])))
-ICPrdaformat <- as.matrix(ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,-c('SiteID','Pair', excol, excol2), with=F])
-XRFrdaformat <- as.matrix(field_artaxlogmean[paste0(SiteID,Pair) %in% field_ICP_sites,-c('SiteID','Pair', excol, excol2), with=F])
+field_lab_sites <- do.call(paste0,
+                           c(intersect(lab_transmean[,c('SiteID','Pair'),with=F], field_transmean[,c('SiteID','Pair'),with=F])))
+labrdaformat <- as.matrix(lab_transmean[paste0(SiteID,Pair) %in% field_lab_sites,-c('SiteID','Pair', excol, excol2), with=F])
+fieldrdaformat <- as.matrix(field_transmean[paste0(SiteID,Pair) %in% field_lab_sites,-c('SiteID','Pair', excol, excol2), with=F])
 
 #Run RDA
-rda_fieldICP<- rda(ICPrdaformat ~ XRFrdaformat, scale=FALSE, na.action = na.fail)
-summary(rda_fieldICP)
-anova(rda_fieldICP) #Check RDA's significance through permutation
-anova(rda_fieldICP, by='axis') #Check each RDA axis' significance through permutation
+rda_fieldlab<- rda(labrdaformat ~ fieldrdaformat, scale=FALSE, na.action = na.fail)
+summary(rda_fieldlab)
+anova(rda_fieldlab) #Check RDA's significance through permutation
+anova(rda_fieldlab, by='axis') #Check each RDA axis' significance through permutation
 
 #RDA triplot based on different combinations of axes
-plot(rda_fieldICP,choices=c(1,2),display=c('sp','bp'),scaling=1,
+plot(rda_fieldlab,choices=c(1,2),display=c('sp','bp'),scaling=1,
      xlim=c(-2, 10), ylim=c(-2, 3))
-text(rda_fieldICP,choices=c(1,2),
-     labels=ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)])
+text(rda_fieldlab,choices=c(1,2),
+     labels=lab_transmean[paste0(SiteID,Pair) %in% field_lab_sites,paste0(SiteID, Pair)])
 
-plot(rda_fieldICP,choices=c(1,3),display=c('sp','bp'),scaling=1,
+plot(rda_fieldlab,choices=c(1,3),display=c('sp','bp'),scaling=1,
      xlim=c(-2, 10), ylim=c(-2, 3))
-text(rda_fieldICP,choices=c(1,3),
-     labels=ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)])
+text(rda_fieldlab,choices=c(1,3),
+     labels=lab_transmean[paste0(SiteID,Pair) %in% field_lab_sites,paste0(SiteID, Pair)])
 
-plot(rda_fieldICP,choices=c(2,3),display=c('sp','bp'),scaling=1,
+plot(rda_fieldlab,choices=c(2,3),display=c('sp','bp'),scaling=1,
      xlim=c(-2, 10), ylim=c(-2, 3))
-text(rda_fieldICP,choices=c(2,3),
-     labels=ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)])
+text(rda_fieldlab,choices=c(2,3),
+     labels=lab_transmean[paste0(SiteID,Pair) %in% field_lab_sites,paste0(SiteID, Pair)])
 
 #Plot RDA studentized residuals (inspired from ordiresids)
 rda_fitresid <- data.table(
-  SiteIDPair = rep(ICPdat_format[paste0(SiteID,Pair) %in% field_ICP_sites,paste0(SiteID, Pair)], ncol(ICPrdaformat)),
-  elem = rep(colnames(ICPrdaformat), nrow(ICPrdaformat), 'each'),
-  fitted = as.vector(sweep(fitted(rda_fieldICP, type = "working"), 2, sigma(rda_fieldICP), "/")),
-  residuals = as.vector(rstudent(rda_fieldICP)))
+  SiteIDPair = rep(lab_transmean[paste0(SiteID,Pair) %in% field_lab_sites,paste0(SiteID, Pair)], ncol(labrdaformat)),
+  elem = rep(colnames(labrdaformat), nrow(labrdaformat), 'each'),
+  fitted = as.vector(sweep(fitted(rda_fieldlab, type = "working"), 2, sigma(rda_fieldlab), "/")),
+  residuals = as.vector(rstudent(rda_fieldlab)))
+
+ggplot(rda_fitresid, aes(x=fitted, y=residuals, label=paste0(SiteIDPair,'-', elem))) + 
+  geom_text(position=position_jitter(width=1,height=0)) + 
+  geom_abline(intercept=c(-2, 2), slope=0)
+
+
+fieldlab_rda_resid <- rda_fitresid[, list(fieldlab_rda_resid = mean(residuals)), by=SiteIDPair]
+
+# ---- Univariate relationship to ICP-OES for the purpose of outlier detection ----
+#Outlier diagnostic plots
+ICPfieldmerge[, ICPfield_flags := 0]
+for (chem in unique(ICPfieldmerge$Elem)) {
+  print(chem)
+  ICPXRF_Zn <- lm(ICP ~ mean, data = ICPfieldmerge[Elem == chem,])
+  ggsave(file.path(inspectdir, paste0('fieldXRFICP_regoutliers', chem, '.png')),
+         regdiagnostic_custom(ICPXRF_Zn, ICPfieldmerge, chem,  flagcol = 'ICPfield_flags'),
+         width = 20, height=12, units='in', dpi=300)
+}
+
+#Plot field XRF ~ ICP data
+ICPfield_plot <- ggplot(ICPfieldmerge[!(is.na(ICP) |  
+                                          Elem %in% c(excol, excol2)),], 
+                        aes(x=mean, y=ICP, color=factor(ICPfield_flags))) + 
+  geom_linerangeh(aes(xmin=mean-sd, xmax=mean+sd), alpha=1/2) + 
+  geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
+  #scale_color_distiller(palette= 'Spectral') +
+  scale_color_brewer(palette= 'Set1') +
+  geom_smooth(aes(group=1),method='lm') +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0)) +
+  facet_wrap(~Elem, scales='free') +
+  theme_classic()
+ICPfield_plot
+
+# ---- Univariate relationship to lab XRF for the purpose of outlier detection ----
+#Outlier diagnostic plots
+ICPfieldmerge[, ICPfield_flags := 0]
+for (chem in unique(ICPfieldmerge$Elem)) {
+  print(chem)
+  ICPXRF_Zn <- lm(ICP ~ mean, data = ICPfieldmerge[Elem == chem,])
+  ggsave(file.path(inspectdir, paste0('fieldXRFICP_regoutliers', chem, '.png')),
+         regdiagnostic_custom(ICPXRF_Zn, ICPfieldmerge, chem,  flagcol = 'ICPfield_flags'),
+         width = 20, height=12, units='in', dpi=300)
+}
+
+#Plot field XRF ~ ICP data
+ICPfield_plot <- ggplot(ICPfieldmerge[!(is.na(ICP) |  
+                                          Elem %in% c(excol, excol2)),], 
+                        aes(x=mean, y=ICP, color=factor(ICPfield_flags))) + 
+  geom_linerangeh(aes(xmin=mean-sd, xmax=mean+sd), alpha=1/2) + 
+  geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
+  #scale_color_distiller(palette= 'Spectral') +
+  scale_color_brewer(palette= 'Set1') +
+  geom_smooth(aes(group=1),method='lm') +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0)) +
+  facet_wrap(~Elem, scales='free') +
+  theme_classic()
+ICPfield_plot
+
+
+
+
+### ---- Field XRF - Pollution predictors outliers  ---- 
+#Format data
+trees_fieldxrf_melt <- melt(trees_fieldxrf[,-c(excol, excol2), with=F], 
+                      id.vars=colnames(trees_fieldxrf)[!(colnames(trees_fieldxrf) %in% periodicTable$symb)], 
+                      variable.name = 'Elem') %>%
+  merge(periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
+
+fieldrdaformat <- as.matrix(trees_fieldxrf[, setdiff(
+  colnames(trees_fieldxrf)[colnames(trees_fieldxrf) %in% periodicTable$symb], c(excol,excol2)), with=F])
+pollutrdaformat <- as.matrix(trees_fieldxrf[,grep('heat', colnames(trees_fieldxrf), value=T), with=F])
+
+#Run RDA
+rda_pollutfield<- rda(fieldrdaformat ~ pollutrdaformat, scale=FALSE, na.action = na.fail)
+summary(rda_pollutfield)
+anova(rda_pollutfield) #Check RDA's significance through permutation
+anova(rda_pollutfield, by='axis') #Check each RDA axis' significance through permutation
+
+#RDA triplot based on different combinations of axes
+plot(rda_pollutfield,choices=c(1,2),display=c('sp','bp'),scaling=1,
+     xlim=c(-2, 10), ylim=c(-2, 3))
+text(rda_pollutfield,choices=c(1,2),
+     labels=lab_transmean[paste0(SiteID,Pair) %in% field_lab_sites,paste0(SiteID, Pair)])
+
+#Plot RDA studentized residuals (inspired from ordiresids)
+rda_fitresid <- data.table(
+  SiteIDPair = rep(trees_fieldxrf[,paste0(SiteID, Pair)], ncol(fieldrdaformat)),
+  elem = rep(colnames(fieldrdaformat), nrow(fieldrdaformat), 'each'),
+  fitted = as.vector(sweep(fitted(rda_pollutfield, type = "working"), 2, sigma(rda_pollutfield), "/")),
+  residuals = as.vector(rstudent(rda_pollutfield)))
 
 ggplot(rda_fitresid, aes(x=fitted, y=residuals, label=paste0(SiteIDPair,'-', elem))) + 
   geom_text(position=position_jitter(width=1,height=0)) + 
@@ -598,11 +842,9 @@ ggplot(rda_fitresid, aes(x=fitted, y=residuals, label=paste0(SiteIDPair,'-', ele
 
 meanresid <- rda_fitresid[, mean(residuals), by=SiteIDPair]
 
-
-#Univariate: Cook's distance, Lund's test, mvoutlier corr.plot 
-#Outlier in terms of multivariate relationship between field XRF and lab XRF or field XRF and ICP-OES
-#Look at outliers spatially
-#Check collinearity among pollution variables and among elements
+## ---- Compile flags ----
+CV_flag <- dcast(fieldXRF_format[cv>(meanCV+2*sdCV),], SiteID+Pair~Elem, value.var='cv') 
+ggplot(fieldXRF_format, aes(x=mean, y=cv)) + geom_point() +scale_x_sqrt()
 
 
 ##### ---- Lab XRF ---- ####
@@ -693,8 +935,6 @@ ICPlabmerge[!(is.na(ICP) | SiteID %in% c('49', '62')),
             round(summary(lm(ICP~value))$adj.r.squared, 2), by=Elem]
 
 #--------------------------------------------------------------------------------------
-#Relate XRF field data to XRF lab data
-fieldlabmerge <- fieldXRF_format[labXRF_format, on = .(SiteID, Pair, Elem)]
 #Plot comparison
 fieldlab_plot <- ggplot(fieldlabmerge, aes(x=mean, y=value, label=SiteID)) + 
   geom_point() + 
@@ -707,26 +947,49 @@ ggplotly(fieldlab_plot)
 #Relate XRF data to pollution predictors 
 ############################################################################################################################################
 
-#Import shapefile of sites
-colnames(trees)[1] <- 'SiteID'
-
-#Join field data to site shapefile
-treesxrf <- merge(trees, field_artaxmean, by=c('SiteID','Pair'))
-treesxrf <- treesxrf[!is.na(treesxrf$Fe) | treesxrf$SiteID==1,]
-
-#Format data
-metal_select <- c('Br','Co','Cr','Cu','Fe','Mn','Ni','Pb','Sr','Ti','V','Zn')
-#metal_select <- c('Fe','Zn','Co','Cr') #for Phil 2018/10/02 'goodresults'
-#metal_select <- c('Ca','K','Sr','P') #for Phil 2018/10/02 'randomresults'
-
-treesxrf_melt <- melt(treesxrf, 
-                      id.vars=colnames(treesxrf)[!(colnames(treesxrf) %in% periodicTable$symb)], 
-                      variable.name = 'Elem')
-treesxrf_melt <- merge(treesxrf_melt, periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
 
+#Plot speed limit index vs. XRF data
+ggplot(trees_labxrf_melt, aes(x=spdlm, y=value)) + 
+  geom_point() + 
+  labs(x='Speed limit index', y='Photon count (normalized)') + 
+  facet_wrap(~name, nrow=3, scales='free_y') +
+  geom_smooth(method='lm', formula = y ~ x, se = T) + 
+  stat_poly_eq(aes(label = paste(..rr.label..)), 
+               label.x.npc = "right", label.y.npc = 0.02,
+               formula = y ~ x, parse = TRUE, size = 3)+
+  stat_fit_glance(method = 'lm',
+                  method.args = list(formula = y ~ x),
+                  geom = 'text',
+                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  theme_classic()
+
+
+#Multiple linear regressions
+Znlm <- lm(Zn~heat_binglog300_1 + sqrt(heatOSMAADTlog300) + sqrt(heatbustransitlog200), 
+           data=trees_fieldxrf) #[!(trees_fieldxrf$SiteID %in% c('19','23')),]
+summary(Znlm)
+ggplotly(qplot(x=predict(Znlm), y=trees_fieldxrf$Zn, color=trees_fieldxrf$heatbustransitlog200, label=as.character(trees_fieldxrf$SiteID)) + geom_smooth(method='lm') )
+#+ geom_text(aes(label=trees_fieldxrf$SiteID))
+
+Felm <- lm(Fe~heat_binglog300_1 + sqrt(heatOSMAADTlog300) + sqrt(heatbustransitlog200), data=trees_fieldxrf)
+summary(Felm)
+qplot(x=predict(Felm), y=trees_fieldxrf$Fe) + geom_smooth(method='lm')
+
+Culm <- lm(Cu~sqrt(AADT), data=trees_fieldxrf)
+summary(Culm)
+qplot(x=predict(Culm), y=trees_fieldxrf$Cu) + geom_smooth(method='lm') 
+
+Pblm <- lm(Pb~bing+sqrt(AADT)+spdlm, data=trees_fieldxrf)
+summary(Pblm)
+ggplotly(qplot(x=predict(Pblm), y=trees_fieldxrf$Pb, label=trees_fieldxrf$SiteID) + geom_smooth(method='lm'))
+
+############################################################################################################################################
+# Relate lab XRF data to pollution predictors 
+############################################################################################################################################
 #Plot Bing Congestion index vs. XRF data
-bing_xrf <- ggplot(treesxrf_melt, aes(x=heat_binglog300_1, y=value, label = SiteID)) + 
+bing_xrf <- ggplot(trees_fieldxrf_melt, aes(x=heat_binglog500, y=value, label = SiteID)) + 
   # geom_point(aes(color=colsmix), size=3) +
   # scale_color_identity() +
   geom_point(aes(color=heatAADTlog100), size=3) +
@@ -756,63 +1019,9 @@ png(file.path(resdir, 'prelim_badXRFresults.png'), width=8, height=8, units = 'i
 bing_xrf
 dev.off()
 
-#Plot traffic volume index vs. XRF data
-ggplot(treesxrf_melt, aes(x=heatAADTlog100, y=value)) + 
-  geom_point() + 
-  labs(x='Traffic volume index', y='Photon count (normalized)') + 
-  facet_wrap(~name, nrow=3, scales='free_y') +
-  geom_smooth(method='lm', formula = y ~ x, se = T) + 
-  stat_poly_eq(aes(label = paste(..rr.label..)), 
-               label.x.npc = "right", label.y.npc = 0.02,
-               formula = y ~ x, parse = TRUE, size = 3)+
-  stat_fit_glance(method = 'lm',
-                  method.args = list(formula = y ~ x),
-                  geom = 'text',
-                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
-                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
-  theme_classic()
-
-#Plot speed limit index vs. XRF data
-ggplot(treesxrf_melt, aes(x=spdlm, y=value)) + 
-  geom_point() + 
-  labs(x='Speed limit index', y='Photon count (normalized)') + 
-  facet_wrap(~name, nrow=3, scales='free_y') +
-  geom_smooth(method='lm', formula = y ~ x, se = T) + 
-  stat_poly_eq(aes(label = paste(..rr.label..)), 
-               label.x.npc = "right", label.y.npc = 0.02,
-               formula = y ~ x, parse = TRUE, size = 3)+
-  stat_fit_glance(method = 'lm',
-                  method.args = list(formula = y ~ x),
-                  geom = 'text',
-                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
-                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
-  theme_classic()
-
-
-#Multiple linear regressions
-Znlm <- lm(Zn~heat_binglog300_1 + sqrt(heatOSMAADTlog300) + sqrt(heatbustransitlog200), 
-           data=treesxrf) #[!(treesxrf$SiteID %in% c('19','23')),]
-summary(Znlm)
-ggplotly(qplot(x=predict(Znlm), y=treesxrf$Zn, color=treesxrf$heatbustransitlog200, label=as.character(treesxrf$SiteID)) + geom_smooth(method='lm') )
-#+ geom_text(aes(label=treesxrf$SiteID))
-
-Felm <- lm(Fe~heat_binglog300_1 + sqrt(heatOSMAADTlog300) + sqrt(heatbustransitlog200), data=treesxrf)
-summary(Felm)
-qplot(x=predict(Felm), y=treesxrf$Fe) + geom_smooth(method='lm')
-
-Culm <- lm(Cu~sqrt(AADT), data=treesxrf)
-summary(Culm)
-qplot(x=predict(Culm), y=treesxrf$Cu) + geom_smooth(method='lm') 
-
-Pblm <- lm(Pb~bing+sqrt(AADT)+spdlm, data=treesxrf)
-summary(Pblm)
-ggplotly(qplot(x=predict(Pblm), y=treesxrf$Pb, label=treesxrf$SiteID) + geom_smooth(method='lm'))
-
-############################################################################################################################################
-# Relate lab XRF data to pollution predictors 
-############################################################################################################################################
-colstodelete <- colnames(treesxrf_melt) %in% c(periodicTable$symb, 'value', 'valuestand', 'valuefact')
-treeslab <- merge(setDT(treesxrf_melt)[, .SD, .SDcols = !colstodelete], labXRF_format, by = c('SiteID', 'Pair', 'Elem'))
+###########################################################################################
+colstodelete <- colnames(trees_labxrf_melt) %in% c(periodicTable$symb, 'value', 'valuestand', 'valuefact')
+treeslab <- merge(setDT(trees_labxrf_melt)[, .SD, .SDcols = !colstodelete], labXRF_format, by = c('SiteID', 'Pair', 'Elem'))
 
 binglab<- ggplot(treeslab[SiteID != 49,], aes(x=bing, y=value, label= SiteID)) + 
   geom_point(aes(color = AADT)) +
@@ -832,7 +1041,7 @@ binglab<- ggplot(treeslab[SiteID != 49,], aes(x=bing, y=value, label= SiteID)) +
 ggplotly(binglab)
 
 Znlm <- lm(value~heat_binglog300_1 + sqrt(heatOSMAADTlog300) + sqrt(heatbustransitlog200), 
-           data=treeslab[Elem=='Zn' & !(treeslab$SiteID %in% c('44','49','51','52','53','54')),]) #[treesxrf$SiteID != '51',]
+           data=treeslab[Elem=='Zn' & !(treeslab$SiteID %in% c('44','49','51','52','53','54')),]) #[trees_fieldxrf$SiteID != '51',]
 summary(Znlm)
 ggplotly(qplot(x=predict(Znlm),
                y=as.list(treeslab[Elem=='Zn' &  !(treeslab$SiteID %in% c('49','51','52','53','54','44')),])$value, 
@@ -841,7 +1050,7 @@ ggplotly(qplot(x=predict(Znlm),
 
 #--------------------------------------------------------------------------------------
 # Relate ICP data to pollution predictors 
-treesICP <- merge(setDT(treesxrf_melt)[, .SD, .SDcols = !colstodelete], ICPmelt, by = c('SiteID', 'Pair', 'Elem'))
+treesICP <- merge(setDT(trees_labxrf_melt)[, .SD, .SDcols = !colstodelete], ICPmelt, by = c('SiteID', 'Pair', 'Elem'))
 
 #
 bingICP<- ggplot(treesICP, aes(x=bing, y=ICP, label = paste(SiteID, Pair))) + 
@@ -893,7 +1102,7 @@ ggplot(treesICP, aes(x=AADT, y=ICP)) +
                   label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
   theme_classic()
 
-Znlm <- lm(ICP~bing+sqrt(AADT), data=treesICP[Elem=='Zn' & SiteID != 49,]) #[treesxrf$SiteID != '51',]
+Znlm <- lm(ICP~bing+sqrt(AADT), data=treesICP[Elem=='Zn' & SiteID != 49,]) #[trees_fieldxrf$SiteID != '51',]
 summary(Znlm)
 ggplotly(qplot(x=predict(Znlm),
                y=as.list(treesICP[Elem=='Zn' & SiteID != 49,])$ICP, 
@@ -918,9 +1127,9 @@ elemwise_comps <- sapply(colnames(dt)[allelem], function(x) {
   #Analyze error among tree samples within sites
   withinsite <- summary(aov(as.formula(paste(x, "~SiteID")), data=dt)) 
   #Regress pollutant predictors against XRF data for each element
-  bing_lm <- summary(lm(as.formula(paste(x, "~bing")), data=treesxrf))
-  aadt_lm <- summary(lm(as.formula(paste(x, "~sqrt(AADT)")), data=treesxrf))
-  spdlm_lm <- summary(lm(as.formula(paste(x, "~sqrt(spdlm)")), data=treesxrf))
+  bing_lm <- summary(lm(as.formula(paste(x, "~bing")), data=trees_fieldxrf))
+  aadt_lm <- summary(lm(as.formula(paste(x, "~sqrt(AADT)")), data=trees_fieldxrf))
+  spdlm_lm <- summary(lm(as.formula(paste(x, "~sqrt(spdlm)")), data=trees_fieldxrf))
   
   return(c(tree_error=withintree[[1]]$`Sum Sq`[2]/sum(withintree[[1]]$`Sum Sq`),
            site_error=(withinsite[[1]]$`Sum Sq`[2]-withintree[[1]]$`Sum Sq`[2])/sum(withinsite[[1]]$`Sum Sq`),
