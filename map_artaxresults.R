@@ -6,6 +6,7 @@
 # Look at potential outliers spatially
 # Check collinearity among pollution variables and among elements
 # Could also use OutliersO3 package (https://blog.revolutionanalytics.com/2018/03/outliers.html)
+# Check out https://cran.r-project.org/web/packages/olsrr/vignettes/intro.html
 
 #---- Import libraries ----
 #options(warn=-1)
@@ -127,10 +128,10 @@ ols_plot_dfbetas_custom <- function(model) {
   return(list(plots=myplots, outliers=outliers))
 }
 
-regdiagnostic_custom <- function(model, df, chem, flagcol) {
+regdiagnostic_custom <- function(model, df, chem, flagcol, multi=FALSE) {
   "Set of diagnostic tests and plots to detect influential and outlying points.
-  Note: modifies df in place by adding flags based on test results"
-  df <- ICPfieldmerge
+  Note: modifies df in place by adding flags based on test results
+  See https://cran.r-project.org/web/packages/olsrr/vignettes/influence_measures.html for plot examples"
   k <- ols_prep_cdplot_data(model)
   d <- ols_prep_outlier_obs(k)
   df[which(df$Elem == chem)[as.data.table(d)[color=='outlier', obs]],
@@ -168,12 +169,23 @@ regdiagnostic_custom <- function(model, df, chem, flagcol) {
     theme_classic()
   
   #Regression with and without outliers plot
-  regoutlier <- ggplot(df[Elem == chem,],
-                       aes(x=mean, y=ICP, label=paste0(SiteID, Pair))) + 
-    geom_text(aes(color=factor(get(flagcol))), size=5) +  
-    geom_smooth(method='lm') + 
-    labs(x = paste0('field XRF', chem), y= paste0('ICP', chem)) + 
-    theme_classic()
+  
+  
+  if (length(attr(terms(model), 'term.labels')) == 1) { #If the model is a simple linear regression
+    regoutlier <- ggplot(df[Elem == chem,],
+                         aes_string(x=names(model$model)[2], y=names(model$model)[1])) + 
+      geom_text(aes(label=paste0(SiteID, Pair), color=factor(get(flagcol))), size=5) +  
+      geom_smooth(method='lm') + 
+      labs(x = paste0(names(model$model)[1], chem), y= paste0(names(model$model)[2], chem)) + 
+      theme_classic()
+  } else {
+    regoutlier <- ggplot(df[Elem == chem,],
+                         aes(x=fitted(model), y=get(names(model$model)[1]))) + 
+      geom_text(aes(label=paste0(SiteID, Pair), color=factor(get(flagcol))), size=5) +  
+      geom_smooth(method='lm') + 
+      labs(x = paste0('fitted', chem), y= paste0(names(model$model)[1], chem)) + 
+      theme_classic()
+  }
   return(arrangeGrob(regoutlier, residplot, residlevplot, cooksdchart, dfbeta_mean, dfbeta_int))
 }
 
@@ -224,6 +236,32 @@ labxrf_list[c_cum_ps > 90000,] #[!(labxrf_list[c_cum_ps > 90000, SiteID] %in% pr
 ########### ---- Import and format lab XRF deconvolution results ---- ####
 labXRF <- deconvolution_import(file.path(datadir, 'XRF20181210/PelletMeasurements/deconvolutionresults_labXRF_20181215'),
                                idstart = 29, idend= 33)
+# ---- Summarize labXRF mean net for each element and Net/Background ratio ----
+#Look at determinants of noise
+fieldXRFsummary <- fieldXRF[,list(meannet = mean(Net),
+                                  noise = mean(Net/Backgr.)), .(Element, Line, Energy.keV)]
+keVmaxnet <- unique(fieldXRFsummary) %>% #Only keep Element-Line-Energy characteristics of each element
+  setkey(meannet) %>% #Classify from low to high energy 
+  .[,.SD[.N], by=Element] #Only keep line with the highest average net photon count
+keVmineV <- unique(fieldXRFsummary) %>% #Only keep Element-Line-Energy characteristics of each element
+  setkey(Energy.keV)%>% #Classify from low to high energy 
+  .[,.SD[1], by=Element] #Only keep line with the lowest average net photon count
+
+ggplot(keVmax, aes(x=log(meannet+1), y=noise)) +
+  geom_text(aes(label=Element)) +
+  scale_y_log10() +
+  geom_smooth(span=1)
+
+ggplot(keVmax, aes(x=Energy.keV, y=noise)) +
+  geom_text(aes(label=Element)) +
+  scale_y_log10() +
+  geom_smooth(span=1)
+
+ggplot(keVmin, aes(x=Energy.keV, y=noise)) +
+  geom_text(aes(label=Element)) +
+  scale_y_log10() +
+  geom_smooth(span=1)
+
 ########### ---- Import ICP-OES data ---- ####
 ICPdat <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_120618-2_edit20181210.xlsx'),
                     1, stringsAsFactors = F)
@@ -434,7 +472,7 @@ ICPmelt[, transICP:=scale(transICP), by=Elem]
 ICP_trans <- dcast(ICPmelt, SiteID+Pair~Elem, value.var='transICP')
 
 ########### ---- Format pollutant data ---- ####
-# ---- Check ICP data distribution by element then transform and standardize ----
+# ---- Check pollutant data distribution by element then transform and standardize ----
 #Use Tukey ladder computation to determine each variable's transformation (only on numeric columns with more than 1 unique observation)
 treesmelt <- melt(trees[!is.na(SiteID),], id.vars=grep('heat', colnames(trees), value=T, invert=T), 
                    variable.name = 'heatvar' , value.name = 'heatvalue')
@@ -464,15 +502,15 @@ treesmelt[, transheat:=scale(transheat), by= heatvar]
 trees_trans <- dcast(treesmelt, formula = SiteID+Pair~heatvar,  value.var='transheat')
 
 ########### ---- Merge datasets ---- ####
-#Merge XRF field data with ICP data
+# ---- Merge XRF field data with ICP data ----
 ICPfieldmerge <- merge(ICPmelt, fieldXRF_format, by = c('SiteID', 'Pair', 'Elem'), all.x=F, all.y=F)
 unique(ICPmelt$Elem)[!(unique(ICPmelt$Elem) %in% unique(fieldXRF_format$Elem))] #Check what elems are in vs out
 unique(fieldXRF_format$Elem)[!(unique(fieldXRF_format$Elem) %in% unique(ICPmelt$Elem))] #Check what elems are in vs out
 
-#Merge XRF field data with XRF lab data
+# ---- Merge XRF field data with XRF lab data ----
 joincols <- c('SiteID', 'Pair', 'Elem')
 labfieldmerge <- labXRF_format[fieldXRF_format, on = joincols] %>%
-  .[SiteID != 1,]
+  .[SiteID != 1 & Elem != 'Rh',]
 setnames(labfieldmerge, 
          colnames(labfieldmerge[,-joincols, with=F]),
          gsub('^(?!i)', 'lab_', colnames(labfieldmerge[,-joincols, with=F]), perl=T))
@@ -480,12 +518,15 @@ setnames(labfieldmerge,
          colnames(labfieldmerge[,-joincols, with=F]),
          gsub('^i[.]', 'field_', colnames(labfieldmerge[,-joincols, with=F]), perl=T))
 
-#Join pollutant data to sites
-trees_fieldxrf <- trees_trans[field_transmean, on=c('SiteID','Pair')][
+# ---- Join transformed/standardized pollutant data to sites ----
+pollutfieldmerge <- fieldXRF_format[trees, on=c('SiteID','Pair')]
+
+# ---- Join transformed/standardized pollutant data to sites ----
+trees_fieldxrf_trans <- trees_trans[field_transmean, on=c('SiteID','Pair')][
   !(is.na(Fe) | SiteID==1),]
-trees_labxrf <- trees_trans[lab_transmean, on=c('SiteID','Pair')][
+trees_labxrf_trans <- trees_trans[lab_transmean, on=c('SiteID','Pair')][
   !(is.na(Fe) | SiteID==1),]
-trees_ICP <- trees_trans[ICP_trans, on=c('SiteID', 'Pair')][
+trees_ICP_trans <- trees_trans[ICP_trans, on=c('SiteID', 'Pair')][
   !(is.na(Fe) | SiteID==1),]
 
 ############################################################################################################################################
@@ -509,36 +550,36 @@ ggplot(fieldXRF_format[!(fieldXRF_format$Elem %in% c('Rh','Pd','Ar')),], aes(x=c
         strip.text = element_text(size=14))
 
 #Plot relationship between elemental concentration and cv
-ggplotly(
-  ggplot(fieldXRF_format[!(fieldXRF_format$Elem %in% c('Rh','Pd','Ar')),], 
-         aes(x=mean, y=cv, color=name, label=paste0(SiteID, Pair))) + 
-    geom_point()+
-    geom_smooth() +
-    labs(x='Mean photon count (normalized)', y='Coefficient of variation') + 
-    facet_wrap(~name, scales='free') +
-    theme_classic() + 
-    theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
-          strip.text = element_text(size=14))
-)
-
-#
-for (elem in unique(fieldXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
-  print(elem)
-  png(file.path(inspectdir, paste0('fieldXRF_withintree_',elem,'.png')), width = 20, height=12, units='in', res=300)
-  print(
-    ggplot(fieldt, 
-           aes(x=paste0(SiteID, Pair), y = get(elem), fill=Pair)) + 
-      geom_line(aes(group=paste0(SiteID, Pair)), color='black') +
-      geom_point(size=5, colour='black', pch=21, alpha=0.75) +
-      labs(x='Site', y='Mean net photon count') + 
-      theme_bw() + 
-      theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
-            strip.text = element_text(size=14),
-            panel.border = element_blank(),
-            axis.line = element_line(color='black'))
-  )
-  dev.off()
-}
+# ggplotly(
+#   ggplot(fieldXRF_format[!(fieldXRF_format$Elem %in% c('Rh','Pd','Ar')),], 
+#          aes(x=mean, y=cv, color=name, label=paste0(SiteID, Pair))) + 
+#     geom_point()+
+#     geom_smooth() +
+#     labs(x='Mean photon count (normalized)', y='Coefficient of variation') + 
+#     facet_wrap(~name, scales='free') +
+#     theme_classic() + 
+#     theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
+#           strip.text = element_text(size=14))
+# )
+# 
+# #
+# for (elem in unique(fieldXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
+#   print(elem)
+#   png(file.path(inspectdir, paste0('fieldXRF_withintree_',elem,'.png')), width = 20, height=12, units='in', res=300)
+#   print(
+#     ggplot(fieldt, 
+#            aes(x=paste0(SiteID, Pair), y = get(elem), fill=Pair)) + 
+#       geom_line(aes(group=paste0(SiteID, Pair)), color='black') +
+#       geom_point(size=5, colour='black', pch=21, alpha=0.75) +
+#       labs(x='Site', y='Mean net photon count') + 
+#       theme_bw() + 
+#       theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
+#             strip.text = element_text(size=14),
+#             panel.border = element_blank(),
+#             axis.line = element_line(color='black'))
+#   )
+#   dev.off()
+# }
 
 # ---- Assess within-site variability ---- 
 #TO DO: CREATE RANDOM PALETTE
@@ -588,17 +629,20 @@ for (elem in unique(fieldXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
 fieldXRF_format[, `:=`(meanCV=mean(cv, na.rm=T),
                        sdCV = sd(cv, na.rm=T)), by=Elem]
 excol <- unique(c(fieldXRF_format[meanCV>0.5,unique(Elem)], 
-                  fieldXRF_format[!(Elem %in% union(brakelining_elem, tire_elem)),unique(Elem)],
-                  'Rh', 'Pd', 'Rb', 'Ag'))
+                  fieldXRF_format[!(Elem %in% union(brakelining_elem, tire_elem)),Elem],
+                  'Rh', 'Pd', 'Rb', 'Ag')) %>%
+  setdiff('Zr') #Keep zirconium as appears to be correlated with traffic
 excol2 <- c('As', 'Cd', 'Mo', 'Na', 'Se', 'Si') #Exclude columns that are very far from being normally distributed (mostly 0s in ICP data)
 
 # ---- Univariate flag based on within-tree CV for metals with CV < 0.5----
-CV_flag <- dcast(fieldXRF_format[cv>(meanCV+2*sdCV),], SiteID+Pair~Elem, value.var='cv') 
-ggplot(fieldXRF_format, aes(x=mean, y=cv)) + geom_point() +scale_x_sqrt()
-NAcount <- function(x) length(which(!is.na(unlist(x))))
-CV_flag[, flag_count := NAcount(.SD)-2,
-        by = seq_len(nrow(CV_flag)), 
-        .SDcols = !(colnames(CV_flag) %in% excol)]
+#NAcount <- function(x) length(which(!is.na(unlist(x))))
+fieldXRF_format[(cv>(meanCV+2*sdCV)) & !(Elem %in% excol) & !is.na(cv),
+                CVflag_count := .N, by=.(SiteID, Pair)][
+                  , CVflag_count := ifelse(is.na(CVflag_count) | is.na(cv), 
+                                           as.integer(round(mean(CVflag_count, na.rm=T))),
+                                           CVflag_count),
+                  by=.(SiteID, Pair)][
+                    is.na(CVflag_count), CVflag_count := 0]
 
 ### ---- Multivariate outlier detection ---- 
 "see https://stats.stackexchange.com/questions/213/what-is-the-best-way-to-identify-outliers-in-multivariate-data 
@@ -751,71 +795,16 @@ ggplot(rda_fitresid, aes(x=fitted, y=residuals, label=paste0(SiteIDPair,'-', ele
 
 fieldlab_rda_resid <- rda_fitresid[, list(fieldlab_rda_resid = mean(residuals)), by=SiteIDPair]
 
-# ---- Univariate relationship to ICP-OES for the purpose of outlier detection ----
-#Outlier diagnostic plots
-ICPfieldmerge[, ICPfield_flags := 0]
-for (chem in unique(ICPfieldmerge$Elem)) {
-  print(chem)
-  ICPXRF_Zn <- lm(ICP ~ mean, data = ICPfieldmerge[Elem == chem,])
-  ggsave(file.path(inspectdir, paste0('fieldXRFICP_regoutliers', chem, '.png')),
-         regdiagnostic_custom(ICPXRF_Zn, ICPfieldmerge, chem,  flagcol = 'ICPfield_flags'),
-         width = 20, height=12, units='in', dpi=300)
-}
-
-#Plot field XRF ~ ICP data
-ICPfield_plot <- ggplot(ICPfieldmerge[!(is.na(ICP) |  
-                                          Elem %in% c(excol, excol2)),], 
-                        aes(x=mean, y=ICP, color=factor(ICPfield_flags))) + 
-  geom_linerangeh(aes(xmin=mean-sd, xmax=mean+sd), alpha=1/2) + 
-  geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
-  #scale_color_distiller(palette= 'Spectral') +
-  scale_color_brewer(palette= 'Set1') +
-  geom_smooth(aes(group=1),method='lm') +
-  scale_y_continuous(expand=c(0,0)) +
-  scale_x_continuous(expand=c(0,0)) +
-  facet_wrap(~Elem, scales='free') +
-  theme_classic()
-ICPfield_plot
-
-# ---- Univariate relationship to lab XRF for the purpose of outlier detection ----
-#Outlier diagnostic plots
-ICPfieldmerge[, ICPfield_flags := 0]
-for (chem in unique(ICPfieldmerge$Elem)) {
-  print(chem)
-  ICPXRF_Zn <- lm(ICP ~ mean, data = ICPfieldmerge[Elem == chem,])
-  ggsave(file.path(inspectdir, paste0('fieldXRFICP_regoutliers', chem, '.png')),
-         regdiagnostic_custom(ICPXRF_Zn, ICPfieldmerge, chem,  flagcol = 'ICPfield_flags'),
-         width = 20, height=12, units='in', dpi=300)
-}
-
-#Plot field XRF ~ ICP data
-ICPfield_plot <- ggplot(ICPfieldmerge[!(is.na(ICP) |  
-                                          Elem %in% c(excol, excol2)),], 
-                        aes(x=mean, y=ICP, color=factor(ICPfield_flags))) + 
-  geom_linerangeh(aes(xmin=mean-sd, xmax=mean+sd), alpha=1/2) + 
-  geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
-  #scale_color_distiller(palette= 'Spectral') +
-  scale_color_brewer(palette= 'Set1') +
-  geom_smooth(aes(group=1),method='lm') +
-  scale_y_continuous(expand=c(0,0)) +
-  scale_x_continuous(expand=c(0,0)) +
-  facet_wrap(~Elem, scales='free') +
-  theme_classic()
-ICPfield_plot
-
-
-
-
-### ---- Field XRF - Pollution predictors outliers  ---- 
+# ---- Multivariate relationship to pollution predictors for the purpose of outlier detection  ---- 
 #Format data
-trees_fieldxrf_melt <- melt(trees_fieldxrf[,-c(excol, excol2), with=F], 
-                      id.vars=colnames(trees_fieldxrf)[!(colnames(trees_fieldxrf) %in% periodicTable$symb)], 
-                      variable.name = 'Elem') %>%
+trees_fieldxrf_trans_melt <- melt(trees_fieldxrf_trans[,-c(excol, excol2), with=F], 
+                            id.vars=colnames(trees_fieldxrf_trans)[!(colnames(trees_fieldxrf_trans) %in% periodicTable$symb)], 
+                            variable.name = 'Elem') %>%
   merge(periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
-fieldrdaformat <- as.matrix(trees_fieldxrf[, setdiff(
-  colnames(trees_fieldxrf)[colnames(trees_fieldxrf) %in% periodicTable$symb], c(excol,excol2)), with=F])
-pollutrdaformat <- as.matrix(trees_fieldxrf[,grep('heat', colnames(trees_fieldxrf), value=T), with=F])
+fieldrdaformat <- as.matrix(trees_fieldxrf_trans[, setdiff(
+  colnames(trees_fieldxrf_trans)[colnames(trees_fieldxrf_trans) %in% periodicTable$symb], c(excol,excol2)), with=F])
+pollutrdaformat <- as.matrix(trees_fieldxrf_trans[,grep('heat', colnames(trees_fieldxrf_trans), value=T), with=F])
 
 #Run RDA
 rda_pollutfield<- rda(fieldrdaformat ~ pollutrdaformat, scale=FALSE, na.action = na.fail)
@@ -831,7 +820,7 @@ text(rda_pollutfield,choices=c(1,2),
 
 #Plot RDA studentized residuals (inspired from ordiresids)
 rda_fitresid <- data.table(
-  SiteIDPair = rep(trees_fieldxrf[,paste0(SiteID, Pair)], ncol(fieldrdaformat)),
+  SiteIDPair = rep(trees_fieldxrf_trans[,paste0(SiteID, Pair)], ncol(fieldrdaformat)),
   elem = rep(colnames(fieldrdaformat), nrow(fieldrdaformat), 'each'),
   fitted = as.vector(sweep(fitted(rda_pollutfield, type = "working"), 2, sigma(rda_pollutfield), "/")),
   residuals = as.vector(rstudent(rda_pollutfield)))
@@ -841,10 +830,251 @@ ggplot(rda_fitresid, aes(x=fitted, y=residuals, label=paste0(SiteIDPair,'-', ele
   geom_abline(intercept=c(-2, 2), slope=0)
 
 meanresid <- rda_fitresid[, mean(residuals), by=SiteIDPair]
+# ---- Univariate relationship to ICP-OES for the purpose of outlier detection ----
+#Outlier diagnostic plots
+ICPfieldmerge[, ICPfield_flags := 0]
+for (chem in unique(ICPfieldmerge$Elem)) {
+  print(chem)
+  ICPfield_lm <- lm(ICP ~ mean, data = ICPfieldmerge[Elem == chem,])
+  ggsave(file.path(inspectdir, paste0('fieldXRFICP_regoutliers', chem, '.png')),
+         regdiagnostic_custom(ICPfield_lm, ICPfieldmerge, chem,  flagcol = 'ICPfield_flags'),
+         width = 20, height=12, units='in', dpi=300)
+  ICPfieldmerge[Elem == chem, ICPfieldR2 := summary(ICPfield_lm)$adj.r.squared]
+}
 
-## ---- Compile flags ----
-CV_flag <- dcast(fieldXRF_format[cv>(meanCV+2*sdCV),], SiteID+Pair~Elem, value.var='cv') 
-ggplot(fieldXRF_format, aes(x=mean, y=cv)) + geom_point() +scale_x_sqrt()
+#Plot field XRF ~ ICP data
+ICPfield_plot <- ggplot(ICPfieldmerge[!(is.na(ICP) |  
+                                          Elem %in% c(excol, excol2)),], 
+                        aes(x=mean, y=ICP, color=factor(ICPfield_flags), group=1)) + 
+  geom_linerangeh(aes(xmin=mean-sd, xmax=mean+sd), alpha=1/2) + 
+  geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
+  #scale_color_distiller(palette= 'Spectral') +
+  scale_color_brewer(palette= 'Set1') +
+  geom_smooth(method='lm') +
+  stat_poly_eq(aes(label = paste(..rr.label..)), 
+               label.x.npc = "right", label.y.npc = 0.02,
+               formula = y ~ x, parse = TRUE, size = 3)+
+  stat_fit_glance(method = 'lm',
+                  method.args = list(formula = y ~ x),
+                  geom = 'text',
+                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0)) +
+  facet_wrap(~Elem, scales='free') +
+  theme_classic()
+ICPfield_plot
+
+
+#Investigate determinants of R2
+ICPmeanR2 <- unique(ICPfieldmerge[, list(meanXRF = mean(mean, na.rm=T),
+                                         meanICP = mean(ICP, na.rm=T),
+                                         R2 = ICPfieldR2), by=Elem][
+                                           keVmaxnet, on='Elem==Element'])
+ggplot(ICPmeanR2, aes(x=meanXRF, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+ggplot(ICPmeanR2, aes(x=meanICP, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+ggplot(ICPmeanR2, aes(x=Energy.keV, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+ggplot(ICPmeanR2, aes(x=noise, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+summary(loess(R2~meanXRF, data=ICPmeanR2, span=1))
+summary(loess(R2~meanXRF+noise, data=ICPmeanR2, span=1))
+
+# ---- Univariate relationship to lab XRF for the purpose of outlier detection ----
+#Outlier diagnostic plots
+labfieldmerge[, labfield_flags := 0]
+for (chem in unique(labfieldmerge$Elem)) {
+  print(chem)
+  labfield_lm <- lm(lab_mean ~ field_mean, data = labfieldmerge[Elem == chem,])
+  ggsave(file.path(inspectdir, paste0('fieldlab_regoutliers', chem, '.png')),
+         regdiagnostic_custom(labfield_lm, labfieldmerge, chem,  flagcol = 'labfield_flags'),
+         width = 20, height=12, units='in', dpi=300)
+  labfieldmerge[Elem == chem, labfieldR2 := summary(labfield_lm)$adj.r.squared]
+}
+
+#Plot field XRF ~ lab data
+labfield_plot <- ggplot(labfieldmerge[!(is.na(lab_mean) |  
+                                          Elem %in% c(excol, excol2)),], 
+                        aes(x=field_mean, y=lab_mean, color=factor(labfield_flags), group=1)) + 
+  geom_linerangeh(aes(xmin=field_mean-field_sd, xmax=field_mean+field_sd), alpha=1/2) + 
+  geom_segment(aes(xend=field_mean, y=lab_mean-lab_sd, yend=lab_mean+lab_sd), alpha=1/2) + 
+  geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
+  #scale_color_distiller(palette= 'Spectral') +
+  scale_color_brewer(palette= 'Set1') +
+  geom_smooth(method='lm') +
+  stat_poly_eq(aes(label = paste(..rr.label..)), 
+               label.x.npc = "right", label.y.npc = 0.02,
+               formula = y ~ x, parse = TRUE, size = 3)+
+  stat_fit_glance(method = 'lm',
+                  method.args = list(formula = y ~ x),
+                  geom = 'text',
+                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0)) +
+  facet_wrap(~Elem, scales='free') +
+  theme_classic()
+labfield_plot
+
+#Look at determinants of R2
+labmeanR2 <- unique(labfieldmerge[, list(meanfield = mean(field_mean, na.rm=T),
+                                         meanlab = mean(lab_mean, na.rm=T),
+                                         R2 = labfieldR2), by=Elem])[
+                                           keVmaxnet, on='Elem==Element']
+
+ggplot(labmeanR2, aes(x=meanfield, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+ggplot(labmeanR2, aes(x=meanlab, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+ggplot(labmeanR2, aes(x=Energy.keV, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+ggplot(labmeanR2, aes(x=noise, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+# ---- Univariate relationship to pollution predictors for the purpose of outlier detection ----
+#Outlier diagnostic plots
+pollutfieldmerge[, pollutfield_flags := 0]
+for (chem in unique(pollutfieldmerge$Elem)) {
+  print(chem)
+  pollutfield_lm <- lm(mean ~ heat_binglog300 + heatOSMAADTlog300 + heatbustransitlog200, 
+                       data = pollutfieldmerge[Elem == chem,])
+  ggsave(file.path(inspectdir, paste0('fieldpollution_regoutliers', chem, '.png')),
+         regdiagnostic_custom(pollutfield_lm, pollutfieldmerge, chem,  flagcol = 'pollutfield_flags'),
+         width = 20, height=12, units='in', dpi=300)
+  pollutfieldmerge[Elem == chem, `:=`(pollutpred = fitted(pollutfield_lm),
+                                      pollutfieldR2 = summary(pollutfield_lm)$adj.r.squared)]
+}
+
+#Plot field XRF ~ lab data
+pollutfield_plot <- ggplot(pollutfieldmerge[!(Elem %in% c(excol, excol2, NA)),], 
+                        aes(x=pollutpred, y=mean, group=1, color=factor(pollutfield_flags))) + 
+  geom_linerange(aes(ymin=mean-sd, ymax=mean+sd), alpha=1/2) + 
+  geom_text(aes(label = paste0(SiteID,Pair)), size=4) +
+  geom_smooth(method='lm') +
+  #scale_color_distiller(palette= 'Spectral') +
+  scale_color_brewer(palette= 'Set1') +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_continuous(expand=c(0,0)) +
+  stat_poly_eq(aes(label = paste(..rr.label..)), 
+               label.x.npc = "right", label.y.npc = 0.02,
+               formula = y ~ x, parse = TRUE, size = 3)+
+  stat_fit_glance(method = 'lm',
+                  method.args = list(formula = y ~ x),
+                  geom = 'text',
+                  aes(label = paste("P-value = ", signif(..p.value.., digits = 3), sep = "")),
+                  label.x.npc = 'right', label.y.npc = 0.12, size = 3) +
+  facet_wrap(~Elem, scales='free') +
+  theme_classic()
+pollutfield_plot
+
+#Investigate determinants of R2
+pollutmeanR2 <- unique(pollutfieldmerge[, list(meanXRF = mean(mean, na.rm=T),
+                                         R2 = pollutfieldR2), by=Elem][
+                                           keVmaxnet, on='Elem==Element'])
+ggplot(pollutmeanR2, aes(x=meanXRF, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+ggplot(pollutmeanR2, aes(x=Energy.keV, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+ggplot(pollutmeanR2, aes(x=noise, y=R2)) + 
+  geom_text(aes(label=Elem)) +
+  scale_x_log10() + 
+  geom_smooth(span=1) + 
+  theme_classic()
+
+## ---- Compile outlier flags ----
+#Merge all flag datasets
+fieldXRF_formatflags <- merge(fieldXRF_format, ICPfieldmerge[, .(SiteID, Pair, Elem, ICPfield_flags, ICPfieldR2)], 
+                              by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
+  merge(labfieldmerge[, .(SiteID, Pair, Elem, labfield_flags, labfieldR2)], 
+        by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
+  merge(pollutfieldmerge[, .(SiteID, Pair, Elem, pollutfield_flags, pollutfieldR2)], 
+        by=c('SiteID', 'Pair', 'Elem'), all.x=T)
+
+ggplot(fieldXRF_formatflags, aes(x=pollutfieldR2, y=ICPfieldR2, label=Elem)) + 
+  geom_text()
+ggplot(fieldXRF_formatflags, aes(x=pollutfieldR2, y=labfieldR2, label=Elem)) + 
+  geom_text()
+
+#Compute total number of flags for each tree across all elements that have an R2 of at least 0.10 across models
+#Don't want to count outliers from spurious models
+flagelems <- fieldXRF_formatflags[, min(ICPfieldR2, labfieldR2, pollutfieldR2, na.rm=T)>0.10, by=Elem][
+  V1==TRUE & Elem != 'Rh', Elem]
+fieldXRF_formatflags[Elem %in% flagelems,
+                     flagpartsum := sum(ICPfield_flags, labfield_flags, pollutfield_flags, na.rm=T), 
+                     by=.(SiteID, Pair)][
+                       , flagsum := sum(flagpartsum, CVflag_count, na.rm=T)]
+
+#Check total number of flags by each type of flag
+fieldXRF_formatflags[Elem %in% flagelems,
+                     `:=`(ICPfield_flags_sum = sum(ICPfield_flags, na.rm=T),
+                          labfield_flags_sum = sum(labfield_flags, na.rm=T),
+                          pollutfield_flags_sum = sum(pollutfield_flags, na.rm=T)),
+                     by=.(SiteID, Pair)]
+
+fieldXRF_formatflags_u <- unique(
+  fieldXRF_formatflags[!is.na(flagpartsum),
+                       .SD, 
+                       .SDcols=c('SiteID', 'Pair', 'CVflag_count',
+                                 grep('flag.*sum', colnames(fieldXRF_formatflags), value=T))])
+
+ggplot(fieldXRF_formatflags_u, aes(x=ICPfield_flags_sum, y=labfield_flags_sum, 
+                                 label=paste0(SiteID, Pair), color = CVflag_count)) + 
+  scale_color_distiller(palette='YlGnBu') +
+  geom_text(position = position_jitter(width=0.25, height=0.25), size=5) 
+
+ggplot(fieldXRF_formatflags_u, aes(x=ICPfield_flags_sum, y=pollutfield_flags_sum, 
+                                   label=paste0(SiteID, Pair), color = CVflag_count)) + 
+  scale_color_distiller(palette='YlGnBu') + 
+  geom_text(position = position_jitter(width=0.25, height=0.25), size=5)
+
+#Records to inspect
+fieldXRF_inspect <- unique(fieldXRF_formatflags[(ICPfield_flags_sum>5) | (labfield_flags_sum > 5) | (pollutfield_flags_sum > 5), 
+                                                .(SiteID, Pair)])
+
+
+
+
 
 
 ##### ---- Lab XRF ---- ####
