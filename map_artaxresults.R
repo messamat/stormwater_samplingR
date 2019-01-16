@@ -5,18 +5,20 @@
 
 ############################################################################################################################################
 #Planning Notes/To do:
-# think about using GLMs rather than Multiple Linear Regressions to avoid transforming the response variable?
-# check residuals for homogeneity of variance
-# think how to deal with spatial autocollinearity? (2_d smoother of coordinates?)
+# re-read Zuur
 # Check collinearity among pollution variables and among elements
-# Inspect outliers: how does the deconvolution fit?
-# Consider excluding all variables with within-tree CV > 0.5
-# Test influence of method on residuals from relationships
-# Think of how to deal with variable selection and multicollinearity 
 # Graph all variables to each other predictors x predictors, elements x elements (for the 3 methods), and elements x predictors
 # Think of what compounded pollution index to predict
+# Think of how to deal with variable selection and multicollinearity 
+# think about using GLMs (e.g. with Gamma distribution when issue of heteroscedasticity) or GAMs 
+#       rather than Multiple Linear Regressions to avoid transforming the response variable?
+# check residuals for homogeneity of variance (https://cran.r-project.org/web/packages/olsrr/vignettes/residual_diagnostics.html)
+# Test influence of method on residuals from relationships
 # Report regressions based on all data minus obvious outliers but remove outliers for spatial predictions
-# re-read Zuur
+# think how to deal with spatial autocollinearity? (2_d smoother of coordinates?)
+# Inspect outliers: how does the deconvolution fit?
+# Consider excluding all variables with within-tree CV > 0.5
+
 
 
 ############################################################################################################################################
@@ -35,6 +37,7 @@ library(ggplot2)
 library(ggstance)
 library(ggpmisc)
 library(gginnards)
+library(GGally)
 library(grid)
 library(gridExtra)
 library(PeriodicTable)
@@ -208,6 +211,57 @@ regdiagnostic_custom <- function(model, df, chem, flagcol,
       theme_classic()
   }
   return(arrangeGrob(regoutlier, residplot, residlevplot, cooksdchart, dfbeta_mean, dfbeta_int))
+}
+
+corr_heatmap <- function(matrix) {
+  "bivariate clustered correlation heatmap from http://www.sthda.com/english/wiki/ggplot2-quick-correlation-matrix-heatmap-r-software-and-data-visualization"
+  cormat <- round(cor(matrix),2)
+  melted_cormat <- melt(cormat)
+  # Get lower triangle of the correlation matrix
+  get_lower_tri<-function(cormat){
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+  reorder_cormat <- function(cormat){
+    # Use correlation between variables as distance
+    dd <- as.dist((1-cormat)/2)
+    hc <- hclust(dd)
+    cormat <-cormat[hc$order, hc$order]
+  }
+  # Reorder the correlation matrix
+  cormat <- reorder_cormat(cormat)
+  upper_tri <- get_upper_tri(cormat)
+  # Melt the correlation matrix
+  melted_cormat <- melt(upper_tri, na.rm = TRUE)
+  # Create a ggheatmap
+  ggheatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value))+
+    geom_tile(color = "white")+
+    scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                         midpoint = 0, limit = c(-1,1), space = "Lab", 
+                         name="Pearson\nCorrelation") +
+    theme_minimal()+ # minimal theme
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                     size = 12, hjust = 1))+
+    coord_fixed() + 
+    geom_text(aes(Var2, Var1, label = value), color = "black", size = 4) +
+    theme(
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.border = element_blank(),
+      panel.background = element_blank(),
+      axis.ticks = element_blank(),
+      legend.justification = c(1, 0),
+      legend.position = c(0.6, 0.7),
+      legend.direction = "horizontal")+
+    guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                                 title.position = "top", title.hjust = 0.5))
+  print(ggheatmap)
 }
 
 ############################################################################################################################################
@@ -1067,7 +1121,7 @@ ggplot(pollutmeanR2, aes(x=noise, y=R2)) +
   geom_smooth(span=1) + 
   theme_classic()
 
-## ---- Compile outlier flags ----
+### ---- Compile outlier flags ----
 #Merge all flag datasets
 fieldXRF_formatflags <- merge(fieldXRF_format, ICPfieldmerge[, .(SiteID, Pair, Elem, ICPfield_flags, ICPfieldR2)], 
                               by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
@@ -1128,7 +1182,7 @@ leaflet(data = outlierlocs) %>% addTiles() %>%
              popup = ~paste0(SiteID, Pair))
 
 
-##### ---- Lab XRF ---- ####
+###################### ---- Lab XRF ---- ####
 # ---- Assess within-pellet variability ----
 #Plot coefficient of variation distributions for every element
 cvmean_labeltree <- as.data.frame(labXRF_format[!(labXRF_format$Elem %in% c('Rh','Pd','Ar')),
@@ -1350,7 +1404,7 @@ ggplot(pollutmeanR2, aes(x=noise, y=R2)) +
 
 
 
-## ---- Compile outlier flags ----
+### ---- Compile outlier flags ----
 #Merge all flag datasets
 labXRF_formatflags <- merge(labXRF_format, ICPlabmerge[, .(SiteID, Pair, Elem, ICPlab_flags, ICPlabR2)], 
                               by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
@@ -1410,7 +1464,7 @@ leaflet(data = outlierlocs) %>% addTiles() %>%
   addMarkers(clusterOptions = markerClusterOptions(),
              popup = ~paste0(SiteID, Pair))
 
-##### ---- ICP-OES ---- ####
+###################### ---- ICP-OES ---- ####
 # ---- Assess within-site variability ----
 ICPmean[, `:=`(SiteID = gsub('[A-Z]', '', SAMPLE.SET),
                Pair = gsub('[0-9]', '', SAMPLE.SET))]
@@ -1514,7 +1568,7 @@ ggplot(pollutmeanR2, aes(x=meanICP/QUANTLIM, y=R2)) +
   geom_smooth(span=1) + 
   theme_classic()
 
-## ---- Compile outlier flags ----
+### ---- Compile outlier flags ----
 #Merge all flag datasets
 ICP_formatflags <- merge(fieldXRF_format, ICPfieldmerge[, .(SiteID, Pair, Elem, ICPfield_flags, ICPfieldR2)], 
                               by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
@@ -1574,7 +1628,8 @@ leaflet(data = outlierlocs) %>% addTiles() %>%
   addMarkers(clusterOptions = markerClusterOptions(),
              popup = ~paste0(SiteID, Pair))
  
-##### ---- Compile all flags and make a flag matrix ---- ####
+###################### ---- Compile all flags and make a flag matrix/heatmap then inspect data and decide on their fate ---- ####
+# ---- Compile flags and make heatmap ----
 allflags <- ICP_formatflags_u[labXRF_formatflags_u, on=.(SiteID, Pair)][
   fieldXRF_formatflags_u, on=.(SiteID, Pair)] 
 allflags[, (grep('i[.]', colnames(allflags), value=T)) := NULL][
@@ -1601,8 +1656,8 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
         axis.title = element_blank(),
         axis.text.x = element_text(angle=45))
 
-#General analysis of the main outliers:
-#49A: on slop by intersection SW of Garfield School in Central District
+# ---- Analysis of the main outliers ----
+#49A: on slope by intersection SW of Garfield School in Central District
 #     outlier for all lab things but not for field stuff. Must indicate that something was wrong with lab.
 #     no collection or analysis comments, moss appearance NTR, overestimated for both ICP and lab XRF.
 #     results completely different from 49B which is not an outlier, suggesting erroneous aspect.
@@ -1645,10 +1700,10 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 #53A: Monroe - Lewis St and Highway 2 intersection
 #     Fine with ICP, outlier with pollut-lab and pollut-field
 #     no collection or analysis comments, moss appearance NTR
-#     field-pollution: Ca, K, Ni, Pb, 
-#     lab-pollution: Fe, Pb, Ti
+#     field-pollution outlier: Ca, K, Ni, Pb, 
+#     lab-pollution outlier: Fe, Pb, Ti
 #     ICP-pollution: None 
-#     high within-tree and  for field and lab (just for K, Pb, Ti, Si) 
+#     high within-tree and  for field and lab (for K, Pb, Ti, Si) 
 #     high within-site variability: Ca, Co, Cr, Cu, K, Mn, Ni, Ti, Zn
 #     -> could just keep 53B instead?
 
@@ -1658,7 +1713,7 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 #     lab XRF data are a bit off (must mean that a clump was taken that does not reflec the full tree)
 #     It seems that one of the three XRF samples overshoots for multiple of the flagelems
 #     ICP-lab outlier for Cu, Fe, Sr, Zn (not by huge amount)
-#     -> NTR keep it
+#     -> keep it for now?
 
 #62A: Sultan under bridge by boat launch over Skykomish
 #     Site with a lot of Al, Cr, Fe, Nickel and Zirkonium - must be because was under bridge
@@ -1666,12 +1721,14 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 #     ICP-lab and ICP-fields quite off: Cr seems just that there might be a non-linear pattern, Fe, Ti, and Zn ICP also higher, 
 #     pollutfields and labfields a little off but not much
 #     It might be because it was under the bridge and receiving more heavy dust?
+#     -> NTR keep it
 
 #53B: Monroe - Lewis St and Highway 2 intersection
 #     A little off for everything aside from lab-fields
 #     no collection or analysis comments, moss appearance NTR
 #     Not really outlier for pollut-fields, a little off for Zn and Fe pollut-ICP, a bit of an outlier for Zn pollut-lab
 #     not much else
+#     -> NTR keep it
 
 #7A: Stone Ave North of Pacific Ave intersection downhill side
 #     field measurement is off pollut-field (most elements)
@@ -1687,7 +1744,7 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 #     High amounts of Pb, Ti, and Zr.. must be like 19A, low to the ground new I5
 #     outlier for Pb for pollut-ICP, pollut-lab, field-lab (also for Sr), field-ICP, etc. just whacky
 #     lab-ICP perfect for Pb, off for Cu
-#     -> high Pb (and some others) must lead to higher variability
+#     -> Keep it, high Pb (and some others) must lead to higher variability
 
 #33B: Cap Hill by volunteer park
 #     little outlier for pollut-lab and pollut-ICP, larger outlier for pollut-field
@@ -1723,7 +1780,7 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 #     medium outlier for pollut-field: Fe, Zn, Zr (under-predicted compared to observed/higher iron than predicted)
 #     large difference between 52A and 52B, 
 #     within-tree over- vs. underestimate vary by element in Fe (under), Zn (over), Zr (over)
-#     -> keep, though could keep only 52B for pollut-field
+#     -> Remove, keep only 52B for pollut-field
 
 #43A: downtown by Amazon building
 #     high outlier for pollut-field: Ca, Cu, K, Mn (over-predicted compared to observed)
@@ -1744,16 +1801,12 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 #     high within-tree CV for Cr - nothing to report
 
 #34A: Capitol Hill 
-#     extreme variability for Pb and outlier for pollutfield, not sure why
+#     extreme variability for Pb and outlier for pollutfield, not sure why.
 #     remember there might have been some construction there?
 
 #44A: near Denny way downtown
 #     pollutICPS off - see 44B- underpredicted levels of Cr, Fe, Ti, Cu, and Zn
 
-
-#Spatial inspection of field outliers:
-# It seems that samples near Highway 2 really stick out in many aspects. It had rained so the moss was wet.
-# It also means that it was stored humid and so some of it might have rotten?
 
 #Inspect within tree variability for field XRF data:
 #19A: it seems that one of the three XRF samples overshoots for multiple of the flagelems
@@ -1768,6 +1821,56 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 #62A: One a bit higher Fe, NTR otherwise
 #7A: one lower Ca, Cu, one higher Fe 
 #34A has one point with extra variability for Pb
+
+# ---- Removal of most egregious outliers and those with a paired tree ----
+#Remove outliers for model exploration
+pollutfieldclean <- pollutfieldmerge[!(paste0(SiteID, Pair) %in% c('7A', '53A', '52A')),]
+pollutlabclean <- pollutlabmerge[!(paste0(SiteID, Pair) %in% c('53A', '49A')),]
+pollutICPclean <-  pollutICPmerge[!(paste0(SiteID, Pair) %in% c('49A')),]
+
+############################################################################################################################################
+
+#Check relationship among all variables 
+############################################################################################################################################
+#---- Field XRF - all elements against each other ----
+pollutfieldclean_cast <- dcast(pollutfieldclean[!is.na(mean)], 
+                               formula = SiteID+Pair~Elem,
+                               value.var= 'mean')
+
+#Scatterplot matrix 
+png(file.path(inspectdir, 'FieldElem_FieldElem_matrix.png'), width = 24, height=24, units='in', res=300)
+ggscatmat(as.data.frame(pollutfieldclean_cast[, colnames(pollutfieldclean_cast) %in% periodicTable$symb, with=F]),
+          alpha=0.7)
+dev.off()
+
+#Correlation heatmap
+corr_heatmap(pollutfieldclean_cast[, .SD, .SDcols = colnames(pollutfieldclean_cast) %in% periodicTable$symb][
+  , -'Rh', with=F])
+
+#PCA
+
+#Select components to predict and define their metal association
+
+#Select individual elements to predict separately
+
+#---- all pollution drivers against each other  ----
+
+#---- all pollution drivers against elements  ----
+
+#Check whether relationship is linear
+#For each type of variable, choose the kernel that fits best
+#Then create a synthetic index (or find ways to better deal with multicollinearity/ could use random forest)?
+
+
+##############
+# Modelling: 
+# one set of model selection for PC ~ selected variables
+# one set of model selection for PC ~ PC
+# one set of model selection for individual elements ~ selected variables
+# one set of model selection for individual elements ~ PC
+# kriging
+# examine impact of method
+
 ############################################################################################################################################
 
 
@@ -1775,7 +1878,9 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 
 
 
-############################################################################################################################################
+
+
+
 #--------------------------------------------------------------------------------------
 # Output overall variability table 
 elemvar <- data.frame(Elem=colnames(fieldXRFcastnorm[,-1]),
