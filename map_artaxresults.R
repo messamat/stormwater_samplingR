@@ -1,4 +1,10 @@
-#Notes:
+#Author: Mathis Messager
+#Contact information: messamat@uw.edu
+#Creation date: July 2018
+#Purpose: import, format, merge, and inspect data for pollution modelling project
+
+############################################################################################################################################
+#Planning Notes/To do:
 # think about using GLMs rather than Multiple Linear Regressions to avoid transforming the response variable?
 # check residuals for homogeneity of variance
 # think how to deal with spatial autocollinearity? (2_d smoother of coordinates?)
@@ -6,9 +12,12 @@
 # Inspect outliers: how does the deconvolution fit?
 # Consider excluding all variables with within-tree CV > 0.5
 # Test influence of method on residuals from relationships
-# Think of how to deal with variable selection and multicollinearity - 
+# Think of how to deal with variable selection and multicollinearity 
+# Graph all variables to each other predictors x predictors, elements x elements (for the 3 methods), and elements x predictors
 # Think of what compounded pollution index to predict
 # Report regressions based on all data minus obvious outliers but remove outliers for spatial predictions
+# re-read Zuur
+
 
 ############################################################################################################################################
 #---- Import libraries ----
@@ -1623,21 +1632,123 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 #     -> NTR keep it
 
 #54A: Monroe Highway 2 and Main St intersection
-#     not outlier for ICPlab and fieldoutlier
+#     not outlier for ICPlab and pollut-field
 #     low outlier: pollut-ICP and pollut-lab, higher outlier: field-lab and field-ICP
 #     suggests something was wrong with lab. moss was very wet when collected, could have rotten.
-#     pollut-ICP: Fe, Ti (but not completely outside)
-#     
+#     no collection or analysis comments, moss appearance NTR
+#     pollut-lab outlier: Fe, Ti (quite far)
+#     pollut-ICP outlier: Fe, Ti(but not completely outside)
+#     field-lab and -ICP outlier: Fe, Mn, Zn
+#     field within-tree variability: one high Fe and Zr value; otherwise nothing much
+#     -> NTR keep it
 
-
-#53A: 
-#     field-pollution: K, Ni, Pb, 
+#53A: Monroe - Lewis St and Highway 2 intersection
+#     Fine with ICP, outlier with pollut-lab and pollut-field
+#     no collection or analysis comments, moss appearance NTR
+#     field-pollution: Ca, K, Ni, Pb, 
 #     lab-pollution: Fe, Pb, Ti
 #     ICP-pollution: None 
+#     high within-tree and  for field and lab (just for K, Pb, Ti, Si) 
+#     high within-site variability: Ca, Co, Cr, Cu, K, Mn, Ni, Ti, Zn
+#     -> could just keep 53B instead?
 
+#19A: along I5 in Eastlake
+#     high within-tree variability for field (Cu, Fe, Mg, Ti, Zn, Zr)
+#     no collection or analysis comments, moss appearance NTR
+#     lab XRF data are a bit off (must mean that a clump was taken that does not reflec the full tree)
+#     It seems that one of the three XRF samples overshoots for multiple of the flagelems
+#     ICP-lab outlier for Cu, Fe, Sr, Zn (not by huge amount)
+#     -> NTR keep it
 
-#62A: 
+#62A: Sultan under bridge by boat launch over Skykomish
+#     Site with a lot of Al, Cr, Fe, Nickel and Zirkonium - must be because was under bridge
+#     no collection or analysis comments, moss appearance NTR
+#     ICP-lab and ICP-fields quite off: Cr seems just that there might be a non-linear pattern, Fe, Ti, and Zn ICP also higher, 
+#     pollutfields and labfields a little off but not much
+#     It might be because it was under the bridge and receiving more heavy dust?
 
+#53B: Monroe - Lewis St and Highway 2 intersection
+#     A little off for everything aside from lab-fields
+#     no collection or analysis comments, moss appearance NTR
+#     Not really outlier for pollut-fields, a little off for Zn and Fe pollut-ICP, a bit of an outlier for Zn pollut-lab
+#     not much else
+
+#7A: Stone Ave North of Pacific Ave intersection downhill side
+#     field measurement is off pollut-field (most elements)
+#     lab-field and  ICP-field (Ca, Cu, Mn mostly) are off
+#     no collection or analysis comments, moss appearance NTR
+#     very different from 7B from Ba, Cr, Cu, Mn, Mo, Pb, Ti, Zr
+#     normal within tree variability
+#     -> remove from field analysis
+
+#20B: horizontal tree in Eastlake below I5
+#     SMall outlier for ICPfields, labfields, ICPlab, pollutlabs - seems an XRF issue
+#     no collection or analysis comments, moss appearance NTR
+#     High amounts of Pb, Ti, and Zr.. must be like 19A, low to the ground new I5
+#     outlier for Pb for pollut-ICP, pollut-lab, field-lab (also for Sr), field-ICP, etc. just whacky
+#     lab-ICP perfect for Pb, off for Cu
+#     -> high Pb (and some others) must lead to higher variability
+
+#33B: Cap Hill by volunteer park
+#     little outlier for pollut-lab and pollut-ICP, larger outlier for pollut-field
+#     no collection or analysis comments, moss appearance NTR
+#     large outlier across all pollution predictions for Cu
+#     small pollut-field outlier for Zn
+#     -> very similar value to 33A for Cu, must mean that it's pollution from other source? Keep 
+
+#16A: By viewpoint in blackberry bush in Discovery Park
+#     no collection or analysis comments, moss appearance NTR
+#     off for pollut-field: higher amounts of Cr, Fe, Ni, Ti, and Zr than predicted (pretty within-tree variability in those elements as well). 
+#     underpredicted amounts in lab and ICP for a few elements as well. Contamination could be sea-borne?
+#     -> NTR: keep
+
+#20A: same as 20B. 
+#     no collection or analysis comments, moss appearance NTR
+#     -> NTR
+
+#44B: by Denny Way near Hotel 
+#     Very dirty-sooty moss though no collection or analysis comments, moss appearance NTR
+#     pollutICP (Fe, Mn), ICPfields and labfields (Fe, Zn - very unpredicted by labs/overpredicted by field)
+#     -> NTR
+
+#52B: Monroe intersection of 522 and highway 2
+#     Very wet moss
+#     a little within-tree variability for both XRF 
+#     ICP detected high levels of Se, Cd, As, and Ni hence outlier for lab-ICP and field-ICP
+#     not really outlier for pollut-field
+#     -> keep
+
+#52A: Monroe intersection of 522 and highway 2
+#     very wet moss
+#     medium outlier for pollut-field: Fe, Zn, Zr (under-predicted compared to observed/higher iron than predicted)
+#     large difference between 52A and 52B, 
+#     within-tree over- vs. underestimate vary by element in Fe (under), Zn (over), Zr (over)
+#     -> keep, though could keep only 52B for pollut-field
+
+#43A: downtown by Amazon building
+#     high outlier for pollut-field: Ca, Cu, K, Mn (over-predicted compared to observed)
+#     no collection or analysis comments, moss appearance NTR
+#     -> NTR
+
+#1B:  calm neighborhood by lake city - first site
+#     wrong moss species
+#     medium outlier for pollut-field: both 1A and 1B are outliers for Ca, K, and Sr - must be because different species
+#     but these elements don't have strong relationship anyways
+#     -> NTR
+
+#3B: Lake City Way
+#     no comments
+#     medium outlier: underpredicted Fe and Zr (but matches ICP and lab well for these elements)
+
+#25A:
+#     high within-tree CV for Cr - nothing to report
+
+#34A: Capitol Hill 
+#     extreme variability for Pb and outlier for pollutfield, not sure why
+#     remember there might have been some construction there?
+
+#44A: near Denny way downtown
+#     pollutICPS off - see 44B- underpredicted levels of Cr, Fe, Ti, Cu, and Zn
 
 
 #Spatial inspection of field outliers:
@@ -1652,7 +1763,6 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
 #44B; NTR
 #49A: NTR
 #51A: NTR
-#52A: Fe one point much lower, Zn and Zr one higher, not huge, NTR otherwise
 #53A: one underestimates Zn, NTR otherwise
 #54A: Fe one much higher, NTR otherwise
 #62A: One a bit higher Fe, NTR otherwise
