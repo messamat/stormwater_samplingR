@@ -52,6 +52,8 @@ library(rrcov)
 library(vegan)
 library(olsrr) #https://cran.r-project.org/web/packages/olsrr/vignettes/intro.html
 library(leaflet)
+library(devtools)
+source_url("https://raw.githubusercontent.com/messamat/biostats_McGarigal/master/biostats.R")
 data(periodicTable)
 
 #---- Define directory structure ----
@@ -144,7 +146,7 @@ ols_plot_dfbetas_custom <- function(model) {
   return(list(plots=myplots, outliers=outliers))
 }
 
-regdiagnostic_custom <- function(model, df, chem, flagcol,
+regdiagnostic_custom <- function(model, df, chem, flagcol, 
                                  CooksOut = FALSE, DFBETAOut = FALSE, tresids = FALSE) {
   "Set of diagnostic tests and plots to detect influential and outlying points.
   Note: modifies df in place by adding flags based on test results
@@ -213,9 +215,15 @@ regdiagnostic_custom <- function(model, df, chem, flagcol,
   return(arrangeGrob(regoutlier, residplot, residlevplot, cooksdchart, dfbeta_mean, dfbeta_int))
 }
 
-corr_heatmap <- function(matrix) {
+heatlab <- function(x) {
+  "quick function to remove keyword from axes"
+  gsub('heat_?', '', x)
+}
+
+corr_heatmap <- function(xmat=matrix, ymat=NULL, clus=TRUE) {
   "bivariate clustered correlation heatmap from http://www.sthda.com/english/wiki/ggplot2-quick-correlation-matrix-heatmap-r-software-and-data-visualization"
-  cormat <- round(cor(matrix),2)
+  cormat <- round(cor(x=xmat, y=ymat),2)
+  
   melted_cormat <- melt(cormat)
   # Get lower triangle of the correlation matrix
   get_lower_tri<-function(cormat){
@@ -227,17 +235,30 @@ corr_heatmap <- function(matrix) {
     cormat[lower.tri(cormat)]<- NA
     return(cormat)
   }
+
   reorder_cormat <- function(cormat){
     # Use correlation between variables as distance
-    dd <- as.dist((1-cormat)/2)
-    hc <- hclust(dd)
-    cormat <-cormat[hc$order, hc$order]
+    if (is.null(ymat)) {
+      dd <- as.dist((1-cormat)/2)
+      hc <- hclust(dd)
+      cormat <-cormat[hc$order, hc$order]
+    } else {
+      dd <- dist(cormat)
+      hc <- hclust(dd)
+      cormat <-cormat[hc$order,]
+    }
   }
   # Reorder the correlation matrix
-  cormat <- reorder_cormat(cormat)
-  upper_tri <- get_upper_tri(cormat)
-  # Melt the correlation matrix
-  melted_cormat <- melt(upper_tri, na.rm = TRUE)
+  if (clus) {cormat <- reorder_cormat(cormat)}
+  
+  if (is.null(ymat)) {
+    upper_tri <- get_upper_tri(cormat)
+    # Melt the correlation matrix
+    melted_cormat <- melt(upper_tri, na.rm = TRUE)
+  } else {
+    melted_cormat <- melt(cormat, na.rm = TRUE)
+  }
+
   # Create a ggheatmap
   ggheatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value))+
     geom_tile(color = "white")+
@@ -257,11 +278,63 @@ corr_heatmap <- function(matrix) {
       panel.background = element_blank(),
       axis.ticks = element_blank(),
       legend.justification = c(1, 0),
-      legend.position = c(0.6, 0.7),
       legend.direction = "horizontal")+
     guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
                                  title.position = "top", title.hjust = 0.5))
+  if(is.null(ymat)) {
+    ggheatmap <- ggheatmap + theme(legend.position = c(0.6, 0.7))
+  }
   print(ggheatmap)
+}
+
+pcabiplot_grid <- function(dt, cols, idcols, nPCs=NULL, scload=1) {
+  "Create a plot matrix of pca principal components against each other"
+  
+  #Run PCA
+  pca <- PcaClassic(dt[, cols, with=F], scale=T)
+  
+  #Add site ID labels
+  pca_scores<- cbind(dt[, idcols, with=F], pca$scores)
+  pca_scores[, ID := do.call(paste0,.SD), .SDcols=idcols]
+  
+  #Add chem element label
+  pca_load <- as.data.table(pca$loadings) %>%
+    .[, Elem := rownames(pca$loadings)]
+  
+  #Compute segment length based on component's eigenvalue
+  pca_load <- pca_load[,(.SD)*pca$eigenvalues, by = Elem]
+  
+  #If number of PCs to graph was not entered as a parameter, default to all significant PCs
+  if (is.null(nPCs)) {
+    nPCs <- ncol(pca$scores)
+  }
+  
+  #Iterate over every pair of PCs
+  biplots_l <- sapply(seq_len(nPCs-1), function(i) {
+    sapply(seq(2, nPCs), function(j) {
+      xpc <- paste0('PC', i)
+      ypc <- paste0('PC', j)
+      
+      if (i != j) {
+        ggplotGrob(
+          ggplot(data=pca_scores, aes_string(x = xpc, y= ypc)) + 
+            geom_text(aes(label=ID), alpha=0.5) +
+            geom_segment(data=pca_load, x=0, y=0, 
+                         aes(xend=scload*get(xpc), 
+                             yend=scload*get(ypc)),
+                         arrow = arrow(length = unit(0.1,"cm")), color='red')+
+            geom_text(data=pca_load, aes(x=scload*get(xpc), y=scload*get(ypc)),
+                      label=rownames(pca$loadings), color='red', size=5, alpha=0.8) +
+            theme_classic()
+        )
+      } else {
+        #Write proportion of variance explained by PC
+        text_grob(round(pca$eigenvalues[i]/sum(pca$eigenvalues), 2))
+      }
+    })
+  })
+  #Plot, only keeping unique combinations by grabbing lower triangle of plot matrix
+  do.call("grid.arrange", list(grobs=biplots_l[lower.tri(biplots_l, diag=T)], ncol=nPCs-1)) 
 }
 
 ############################################################################################################################################
@@ -364,7 +437,6 @@ tire_elem <- c('Al', 'Ba', 'Ca', 'Cd', 'Co', 'Cr', 'Cu', 'Fe', 'K', 'Mg', 'Mn', 
                'Pb', 'Sb', 'Sr', 'Ti', 'Zn')
 
 ############################################################################################################################################
-
 
 
 # 2. Format XRF and ICP data
@@ -1802,8 +1874,14 @@ pollutICPclean <-  pollutICPmerge[!(paste0(SiteID, Pair) %in% c('49A')),]
 # 4. Check relationship among and reduce variables 
 ############################################################################################################################################
 #---- A. Field XRF - all elements against each other ----
+castformula <- as.formula(paste0(
+  paste0(colnames(pollutfieldclean)[!(colnames(pollutfieldclean) %in%
+                                        c('Elem', 'name', 'mean','range', 'sd', 'cv', 'transmean',
+                                          'pollutfield_flags', 'pollutfieldR2', 'pollutpred'))],
+         collapse='+'),
+  '~Elem'))
 pollutfieldclean_cast <- dcast(pollutfieldclean[!is.na(mean)], 
-                               formula = SiteID+Pair~Elem,
+                               formula = castformula,
                                value.var= 'mean')
 
 #Create vector of columns - 1.G. and  3.A.3. for column selection
@@ -1820,93 +1898,124 @@ ggscatmat(as.data.frame(pollutfieldclean_cast[, elemcols, with=F]),
 dev.off()
 
 #Correlation heatmap
+png(file.path(inspectdir, 'corheatmap_FieldElem_FieldElem.png'), width = 12, height=12, units='in', res=300)
 corr_heatmap(pollutfieldclean_cast[, elemcols, with=F])
+dev.off()
 
-# ---- robust PCA with rrcov (see 4.2 p24 of Todorov and Filzmoser 2009) ---- 
-"Interestingly, PcaGrid, a robust PCA, gives completely difft results with PC1 and PC2 
+#PCA with rrcov (see 4.2 p24 of Todorov and Filzmoser 2009)
+"Interestingly, PcaGrid, a robust PCA, gives completely different results than classic PCA with PC1 and PC2 
 being clearly correlated"
 pca <- PcaClassic(~., data=pollutfieldclean_cast[,elemcols_sub,with=F], scale=TRUE) #z-standardize
 summary(pca)
-screeplot(pca, type="lines", main="Screeplot: robust PCA") #5 PCs would be fine
-biplot(pca, main="Robust biplot", col=c("gray55", "red"))
+screeplot(pca, main="Screeplot: classic PCA", bstick=TRUE) #First PC significant compared to broken stick
+ordi.monte(pollutfieldclean_cast[,elemcols_sub,with=F],ord='pca',dim=5) #2PCs significant with Monte-carlo test of component significance
+biplot(pca, main="Robust biplot", col=c("gray55", "red"))  
 plot(pca)
-plot(PcaHubert(outlierdat_dist[,cols,with=F], k=3))
-
 
 pollutfieldclean_pca<- cbind(pollutfieldclean_cast, pca$scores)
 setnames(pollutfieldclean_pca, colnames(pca$scores), paste0(colnames(pca$scores), '_scores'))
 setnames(pca_load, colnames(pca_load), paste0(colnames(pca_load), '_loadings'))
 
-
-pairs(pca$loadings, col=c("red", "green", "blue"))
-
-pcabiplot_grid <- function(dt, cols, idcols, nPCs=NULL, scload=1) {
-  pca <- PcaClassic(dt[, cols, with=F], scale=T)
-  pca_scores<- cbind(dt[, idcols, with=F], pca$scores)
-  pca_scores[, ID := do.call(paste0,.SD), .SDcols=idcols]
-  pca_load <- as.data.table(pca$loadings) %>%
-    .[, Elem := rownames(pca$loadings)]
-  pca_load <- pca_load[,(.SD)*pca$eigenvalues, by = Elem]
-  
-  if (is.null(nPCs)) {
-    nPCs <- ncol(pca$scores)
-  }
-  biplots_l <- sapply(seq_len(nPCs-1), function(i) {
-    sapply(seq(2, nPCs), function(j) {
-      xpc <- paste0('PC', i)
-      ypc <- paste0('PC', j)
-
-      if (i != j) {
-        ggplotGrob(
-          ggplot(data=pca_scores, aes_string(x = xpc, y= ypc)) + 
-            geom_text(aes(label=ID), alpha=0.5) +
-            geom_segment(data=pca_load, x=0, y=0, 
-                         aes(xend=scload*get(xpc), 
-                             yend=scload*get(ypc)),
-                         arrow = arrow(length = unit(0.1,"cm")), color='red')+
-            geom_text(data=pca_load, aes(x=scload*get(xpc), y=scload*get(ypc)),
-                      label=rownames(pca$loadings), color='red', size=5, alpha=0.8) +
-            theme_classic()
-        )
-      } else {
-        text_grob(round(pca$eigenvalues[i]/sum(pca$eigenvalues), 2))
-      }
-    })
-  })
-  do.call("grid.arrange", list(grobs=biplots_l[lower.tri(biplots_l, diag=T)], ncol=nPCs-1)) #only keep unique combinations
-}
-
+#Create a PCA biplot matrix where all components are graphed against each other
 pcabiplot_grid(pollutfieldclean_cast, nPCs = 5, cols = elemcols_sub,
                idcols = c('SiteID', 'Pair'),  scload = 3)
 
+#Inspect components to decide which ones to predict
+loadings(pca)
+#There are no very distinct patterns - everything is pretty correlated:
+  #First component: Zn, Zr, Ti, Ni, Fe, Cu, and Cr load equally (0.33-0.36);
+  #                 Ca, K, and Pb a little less (0.20-25);
+  #                 Sr, and Mn not much (0.11-0.12)
+  #Second component:Ca, K, and Sr load the strongest (0.47-0.49)
+  #                 Pb and Mn load positively but not much (0.16)
+  #                 Cu and Ni are ~ 0
+  #                 Zn, Zr, Ti, Fe and Cr load negatively -0.11 to -0.30
+
+#Select individual elements to predict separately: Zn, Fe, Cu, Pb
+
+#---- B. All pollution drivers against each other ----
+#Define columns to analyze
+pollutcols <- grep('heat|NLCD', colnames(pollutfieldclean), value=T, ignore.case = T)
+
+#Correlation heatmap
+png(file.path(inspectdir, 'corheatmap_PollutionDrivers_PollutionDrivers.png'),
+    width = 20, height=20, units='in', res=300)
+corr_heatmap(pollutfieldclean_cast[, pollutcols, with=F]) + 
+  scale_x_discrete(labels=heatlab) + 
+  scale_y_discrete(labels=heatlab)
+dev.off()
+
+"Overall, all predictors are correlated with increasing correlation with increasing kernel size
+as it picks up the common effect of increased road density on the indices. 
+Within categories, indices are correlated > 0.90 with indices of 1 for pow1,2 and log.
+Across categories (for kernel > 50 m):
+gradient-AADT: 0.3-0.6; gradient_bing: 0.2-0.3; gradient-LU: 0.15-0.20; gradient-transit: 0.25-0.4; gradient-SPD:0.4-0.5
+AADT-bing: 0.45-0.75 depending on kernel correspondence; AADT-LU: 0.25-0.40; AADT-transit: 0.65-0.80; AADT-SPD:0.6-0.7 particularly for OSMAADT
+bing-LU: 0.5, bing-transit: 0.45-0.60; bing-SPD: 0.5-0.60
+transit-LU: 0.35-0.45"
+
+#---- C. All pollution drivers against field XRF all elems ----
+png(file.path(inspectdir, 'corheatmap_PollutionDrivers_FieldElem.png'),
+    width = 22, height=20, units='in', res=300)
+corr_heatmap(xmat=pollutfieldclean_cast[, pollutcols, with=F],
+             ymat=pollutfieldclean_cast[, elemcols, with=F],
+             clus = FALSE) +
+  scale_y_discrete(labels=heatlab) + 
+  theme(text=element_text(size=24))
+dev.off()
+
+"Best univariate predictors for each category:
+- heat_binglog200 (very similar to 300 but faster to compute)
+- nlcd_imp_ps (not filtered)
+- heatbustransitlog200 (comparable to two others though much better than 100 for zinc)
+- heatOSMAADTlog50 (much better than the others by up to 0.20) -- could be different process of emission? same is true for normal AADT)
+- heatOSMgradientlog200
+- heatOSMSPDlog100 (should probably get 200 when available)"
+
+#---- C. Selected pollution drivers against selected field XRF all elems ----
+selcols <- c('heat_binglog200', 'nlcd_imp_ps', 'heatbustransitlog200',
+             'heatOSMAADTlog50', 'heatOSMgradientlog200', 'heatOSMSPDlog100',
+             'Cu', 'Fe', 'Pb', 'Zn')
+
+png(file.path(inspectdir, 'cormatrix_SelFieldElem_SelPollutionDrivers.png'), 
+    width = 12, height=12, units='in', res=300)
+ggscatmat(as.data.frame(pollutfieldclean_cast[, selcols, with=F]),
+alpha=0.7)
+dev.off()
+
+#---- D. Create a synthetic PCA-based pollution driver index  ----
+pollutpca <- PcaClassic(~., data=pollutfieldclean_cast[,selcols[selcols %in% pollutcols],with=F], scale=TRUE) #z-standardize
+summary(pollutpca)
+screeplot(pollutpca, main="Screeplot: classic PCA", bstick=TRUE) #First PC significant compared to broken stick
+ordi.monte(pollutfieldclean_cast[,selcols[selcols %in% pollutcols],with=F],ord='pca',dim=5) #2PCs significant with Monte-carlo test of component significance
+pcabiplot_grid(pollutfieldclean_cast, nPCs = 3, cols = selcols[selcols %in% pollutcols],
+               idcols = c('SiteID', 'Pair'),  scload = 3)
+loadings(pollutpca)
+
+#---- E. Create a synthetic sum-based pollution index (averaging centered and standardized elements)   ----
+#Check that all can be transformed using the same transformation then transform
+selcols_trans <- data.trans(as.data.frame(pollutfieldclean_cast[, elemcols[elemcols %in% selcols], with=F]),method='log')
+logcols <- paste0(elemcols[elemcols %in% selcols], 'log')
+pollutfieldclean_cast[, (logcols) := selcols_trans]
+#z-standardized by col then average row-wise
+pollutfieldclean_cast[, pollution_index := Reduce('+', lapply(.SD, scale))/length(logcols), .SDcols = logcols]
+
+############################################################################################################################################
+
+# 5. Model selection (consider robust regression)
+############################################################################################################################################
+#---- A. Synthetic index ~ separate predictors ----
+#---- B. Synthetic index ~ PC ----
+#---- C. Individual pollutants ~ separate predictors ----
+#---- C. Individual pollutants ~ PC ----
 
 
 
-#Select components to predict and define their metal association
-
-#Select individual elements to predict separately
-
-#---- all pollution drivers against each other  ----
-
-#---- all pollution drivers against elements  ----
-
-#Check whether relationship is linear
-#For each type of variable, choose the kernel that fits best
-#Then create a synthetic index (or find ways to better deal with multicollinearity/ could use random forest)?
-
-
-##############
-# Modelling (without outliers - final model fit can be assessed with and without): 
-# one set of model selection for PC ~ selected variables
-# one set of model selection for PC ~ PC
-# one set of model selection for individual elements ~ selected variables
-# one set of model selection for individual elements ~ PC
+# check lots of residuals - test assumption of independence and normality of residuals (useful list of plots https://newonlinecourses.science.psu.edu/stat501/node/317/)
 # kriging
 # examine impact of method
 
 ############################################################################################################################################
-
-
 
 
 
