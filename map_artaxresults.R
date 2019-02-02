@@ -6,19 +6,25 @@
 ############################################################################################################################################
 #Planning Notes/To do:
 # re-read Zuur
-# Check collinearity among pollution variables and among elements
-# Graph all variables to each other predictors x predictors, elements x elements (for the 3 methods), and elements x predictors
-# Think of what compounded pollution index to predict
-# Think of how to deal with variable selection and multicollinearity 
+# Modify pollution index to be bounded by 0! 
 # think about using GLMs (e.g. with Gamma distribution when issue of heteroscedasticity) or GAMs 
-#       rather than Multiple Linear Regressions to avoid transforming the response variable?
+#       rather than Multiple Linear Regressions to avoid transforming the response variable if residuals aren't good looking?
 # check residuals for homogeneity of variance (https://cran.r-project.org/web/packages/olsrr/vignettes/residual_diagnostics.html)
 # Test influence of method on residuals from relationships
 # Report regressions based on all data minus obvious outliers but remove outliers for spatial predictions
 # think how to deal with spatial autocollinearity? (2_d smoother of coordinates?)
-# Inspect outliers: how does the deconvolution fit?
-# Consider excluding all variables with within-tree CV > 0.5
+# check lots of residuals - test assumption of independence and normality of residuals (useful list of plots https://newonlinecourses.science.psu.edu/stat501/node/317/)
+# Think of how to deal with spatial dependence: kriging or k-fold regression
+# Might use bootstrapping and k-fold validation
+# Could also use a model averaging approach
+# examine impact of method
 
+#Get places with air pollution monitoring or water pollution monitoring. Model for these areas
+#Automatize workflow to be able to plug in shapefile and model for these polygons or in the basin of those areas
+#Get nationwide AADT and speed limit averages for roads
+#Create best model for each variable combination
+#Start downloading for Cheasepeake Bay
+#Parallelize API download to go much faster so that we can run multiple areas at once?
 
 ############################################################################################################################################
 #---- Import libraries ----
@@ -41,6 +47,8 @@ library(GGally)
 library(grid)
 library(gridExtra)
 library(PeriodicTable)
+library(xtable)
+library(tools)
 library(kableExtra)
 library(dplyr)
 library(hexbin)
@@ -54,6 +62,8 @@ library(olsrr) #https://cran.r-project.org/web/packages/olsrr/vignettes/intro.ht
 library(leaflet)
 library(devtools)
 library(car)
+library(AICcmodavg)
+library(DescTools)
 
 source_url("https://raw.githubusercontent.com/messamat/biostats_McGarigal/master/biostats.R")
 data(periodicTable)
@@ -63,12 +73,21 @@ rootdir <- find_root(has_dir("src"))
 resdir <- file.path(rootdir, "results")
 datadir <- file.path(rootdir, "data")
 inspectdir <- file.path(resdir, "data_inspection")
+moddir <- file.path(resdir, "data_modeling")
 
 if (dir.exists(inspectdir)) {
   warning(paste(inspectdir, 'already exists'))
 } else {
   warning(paste('Create new directory:',inspectdir))
   dir.create(inspectdir)
+}
+
+
+if (dir.exists(moddir)) {
+  warning(paste(moddir, 'already exists'))
+} else {
+  warning(paste('Create new directory:',moddir))
+  dir.create(moddir)
 }
 
 #Element colors: http://jmol.sourceforge.net/jscolors/
@@ -1938,11 +1957,15 @@ loadings(pca)
 #---- B. Create a synthetic sum-based pollution index (averaging centered and standardized elements)   ----
 #Check that all can be transformed using the same transformation then transform
 selcols <- c('Cu', 'Fe', 'Pb', 'Zn')
-selcols_trans <- data.trans(as.data.frame(pollutfieldclean_cast[, elemcols[elemcols %in% selcols], with=F]),method='log', plot=F)
-logcols <- paste0(elemcols[elemcols %in% selcols], 'log')
-pollutfieldclean_cast[, (logcols) := selcols_trans]
-#z-standardized by col then average row-wise
-pollutfieldclean_cast[, pollution_index := Reduce('+', lapply(.SD, scale))/length(logcols), .SDcols = logcols]
+selcols_trans <- data.trans(as.data.frame(pollutfieldclean_cast[, elemcols[elemcols %in% selcols], with=F]), 
+                            method='power',exp=1/3, plot=T)
+cbcols <- paste0(elemcols[elemcols %in% selcols], 'cubrt')
+pollutfieldclean_cast[, (cbcols) := selcols_trans]
+#standardize by max value (use of transformed index actually leads to heteroscedacity)
+pollutfieldclean_cast[, cbpollution_index := 100*Reduce('+', lapply(.SD, function(x) (x/max(x))))/length(cbcols), 
+                      .SDcols = cbcols][
+                        ,pollution_index := 100*Reduce('+', lapply(.SD, function(x) (x/max(x))))/length(cbcols),
+                        .SDcols = elemcols[elemcols %in% selcols]]
 
 #---- C. All pollution drivers against each other ----
 #Define columns to analyze
@@ -1969,7 +1992,7 @@ transit-LU: 0.35-0.45"
 png(file.path(inspectdir, 'corheatmap_PollutionDrivers_FieldElem.png'),
     width = 22, height=20, units='in', res=300)
 corr_heatmap(xmat=pollutfieldclean_cast[, pollutcols, with=F],
-             ymat=pollutfieldclean_cast[, c(elemcols, 'pollution_index'), with=F],
+             ymat=pollutfieldclean_cast[, c(elemcols, 'pollution_index', 'cbpollution_index'), with=F],
              clus = FALSE) +
   scale_y_discrete(labels=heatlab) + 
   theme(text=element_text(size=24))
@@ -1979,13 +2002,13 @@ dev.off()
 - heat_binglog300
 - nlcd_imp_ps (not filtered)
 - heatbustransitlog300 (comparable to two others though much better than 100 for zinc)
-- heatOSMAADTlog50 (much better than the others by up to 0.20) -- could be different process of emission? same is true for normal AADT)
+- heatOSMAADTlog300
 - heatOSMgradientlog200 (should produce 300 version)
 - heatOSMSPDlog100 (should probably get 200 when available)"
 
 #---- E. Selected pollution drivers against selected field XRF all elems ----
-selcols <- c(selcols, 'heat_binglog200', 'nlcd_imp_ps', 'heatbustransitlog200',
-             'heatOSMAADTlog50', 'heatOSMgradientlog200', 'heatOSMSPDlog100')
+selcols <- c(selcols, 'heat_binglog300', 'nlcd_imp_ps', 'heatbustransitlog300',
+             'heatOSMAADTlog300', 'heatOSMgradientlog200', 'heatOSMSPDlog100')
 
 png(file.path(inspectdir, 'cormatrix_SelFieldElem_SelPollutionDrivers.png'), 
     width = 12, height=12, units='in', res=300)
@@ -2011,7 +2034,7 @@ modlistA <- list() #List to hold models
 modlistA[[1]] <- lm(pollution_index ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
 
 #-------- 1. Single parameter models --------
-modlistA[[2]] <- lm(pollution_index ~ heatOSMAADTlog50, data = pollutfieldclean_cast)
+modlistA[[2]] <- lm(pollution_index ~ heatOSMAADTlog300, data = pollutfieldclean_cast)
 summary(modlistA[[2]])
 par(mfrow=c(2,2))
 plot(modlistA[[2]])
@@ -2024,7 +2047,7 @@ modlistA[[4]] <- lm(pollution_index ~ nlcd_imp_ps, data = pollutfieldclean_cast)
 summary(modlistA[[4]])
 plot(modlistA[[4]])
 
-modlistA[[5]] <- lm(pollution_index ~ heatbustransitlog200, data = pollutfieldclean_cast)
+modlistA[[5]] <- lm(pollution_index ~ heatbustransitlog300, data = pollutfieldclean_cast)
 summary(modlistA[[5]])
 plot(modlistA[[5]])
 
@@ -2052,110 +2075,112 @@ summary(modlistA[[9]])
 plot(modlistA[[9]])
 vif(modlistA[[9]])
 
-modlistA[[10]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300, data = pollutfieldclean_cast)
+modlistA[[10]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300, data = pollutfieldclean_cast)
 summary(modlistA[[10]])
 plot(modlistA[[10]])
 
-modlistA[[11]] <- lm(pollution_index ~ heatOSMAADTlog50 + heat_binglog300 + heatbustransitlog200, data = pollutfieldclean_cast)
+modlistA[[11]] <- lm(pollution_index ~ heatOSMAADTlog300 + heat_binglog300 + heatbustransitlog300, data = pollutfieldclean_cast)
 summary(modlistA[[11]])
 plot(modlistA[[11]])
 
-modlistA[[12]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300 + heatbustransitlog200 + 
-                       heat_binglog300:heatbustransitlog200, data = pollutfieldclean_cast)
+modlistA[[12]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300 + heatbustransitlog300 + 
+                       heat_binglog300:heatbustransitlog300, data = pollutfieldclean_cast)
 summary(modlistA[[12]])
 plot(modlistA[[12]])
 
-modlistA[[13]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300 + heatbustransitlog200, data = pollutfieldclean_cast)
+modlistA[[13]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300 + heatbustransitlog300, data = pollutfieldclean_cast)
 summary(modlistA[[13]])
 plot(modlistA[[13]])
 
-modlistA[[14]] <- lm(pollution_index ~ heatOSMAADTlog50 + heat_binglog300 + heatbustransitlog200 + poly(heatOSMSPDlog100,2),
+modlistA[[14]] <- lm(pollution_index ~ heatOSMAADTlog300 + heat_binglog300 + heatbustransitlog300 + poly(heatOSMSPDlog100,2),
                      data = pollutfieldclean_cast)
 summary(modlistA[[14]])
 plot(modlistA[[14]])
 
-modlistA[[15]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300 + poly(heatOSMSPDlog100,2) + heatbustransitlog200,
+modlistA[[15]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300 + poly(heatOSMSPDlog100,2) + heatbustransitlog300,
                      data = pollutfieldclean_cast)
 summary(modlistA[[15]])
 plot(modlistA[[15]])
 
-modlistA[[15]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300*heatOSMSPDlog100 + heatbustransitlog200,
+modlistA[[15]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300*heatOSMSPDlog100 + heatbustransitlog300,
                      data = pollutfieldclean_cast)
 summary(modlistA[[15]])
 plot(modlistA[[15]])
 
-modlistA[[16]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300*heatOSMSPDlog100 + heatbustransitlog200*heatOSMSPDlog100,
+modlistA[[16]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300*heatOSMSPDlog100 + 
+                       heatbustransitlog300*heatOSMSPDlog100,
                      data = pollutfieldclean_cast)
 summary(modlistA[[16]])
 plot(modlistA[[16]])
 
-modlistA[[17]] <- lm(pollution_index ~ heatOSMAADTlog50 + heat_binglog300 + poly(heatOSMSPDlog100,2) + 
-                       heatbustransitlog200 + heatOSMgradientlog200,
+modlistA[[17]] <- lm(pollution_index ~ heatOSMAADTlog300 + heat_binglog300 + poly(heatOSMSPDlog100,2) + 
+                       heatbustransitlog300 + heatOSMgradientlog200,
                      data = pollutfieldclean_cast)
 summary(modlistA[[17]])
 plot(modlistA[[17]])
 
-modlistA[[18]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300*heatOSMSPDlog100*heatOSMgradientlog200 +
-                       heatbustransitlog200,
+modlistA[[18]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300*heatOSMSPDlog100*heatOSMgradientlog200 +
+                       heatbustransitlog300,
                      data = pollutfieldclean_cast)
 summary(modlistA[[18]])
 plot(modlistA[[18]])
 
-modlistA[[19]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300*heatOSMSPDlog100 + 
+modlistA[[19]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300*heatOSMSPDlog100 + 
                        heat_binglog300:heatOSMgradientlog200 + 
-                       heatbustransitlog200 + heatbustransitlog200:heatOSMgradientlog200,
+                       heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog200,
                      data = pollutfieldclean_cast)
 summary(modlistA[[19]])
 plot(modlistA[[19]])
 
-modlistA[[20]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300*heatOSMSPDlog100 + 
-                       heat_binglog300:heatOSMgradientlog200 + heatOSMAADTlog50:heatOSMgradientlog200 +
-                       heatbustransitlog200 + heatbustransitlog200:heatOSMgradientlog200,
+modlistA[[20]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300*heatOSMSPDlog100 + 
+                       heat_binglog300:heatOSMgradientlog200 + heatOSMAADTlog300:heatOSMgradientlog200 +
+                       heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog200,
                      data = pollutfieldclean_cast)
 summary(modlistA[[20]])
 plot(modlistA[[20]])
 
-modlistA[[21]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300*heatOSMSPDlog100 + 
+modlistA[[21]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300*heatOSMSPDlog100 + 
                        heat_binglog300:heatOSMgradientlog200 + heatOSMSPDlog100:heatOSMgradientlog200 +
-                       heatbustransitlog200 + heatbustransitlog200:heatOSMgradientlog200,
+                       heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog200,
                      data = pollutfieldclean_cast)
 summary(modlistA[[21]])
 plot(modlistA[[21]])
 
-modlistA[[22]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300*heatOSMSPDlog100 + 
+modlistA[[22]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300*heatOSMSPDlog100 + 
                        heat_binglog300:heatOSMgradientlog200 + heat_binglog300:nlcd_imp_ps + nlcd_imp_ps +
                        heatOSMSPDlog100:heatOSMgradientlog200 +
-                       heatbustransitlog200 + heatbustransitlog200:heatOSMgradientlog200,
+                       heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog200,
                      data = pollutfieldclean_cast)
 summary(modlistA[[22]])
 plot(modlistA[[22]])
 
-modlistA[[23]] <- lm(pollution_index ~ heatOSMAADTlog50*heat_binglog300*heatOSMSPDlog100 + 
+modlistA[[23]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300*heatOSMSPDlog100 + 
                        heat_binglog300:heatOSMgradientlog200 + heat_binglog300:nlcd_imp_ps +
                        heatOSMSPDlog100:heatOSMgradientlog200 +
-                       heatbustransitlog200 + heatbustransitlog200:heatOSMgradientlog200,
+                       heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog200,
                      data = pollutfieldclean_cast)
 summary(modlistA[[23]])
 plot(modlistA[[23]])
 
 modlistA[[24]] <- lm(pollution_index ~ heat_binglog300*heatOSMSPDlog100*heatOSMgradientlog200 +
-                       heatbustransitlog200, 
+                       heatbustransitlog300, 
                      data = pollutfieldclean_cast)
 summary(modlistA[[24]])
 plot(modlistA[[24]])
 
-modlistA[[25]] <- lm(pollution_index ~ heat_binglog300*heatOSMAADTlog50*heatOSMgradientlog200 +
-                       heatbustransitlog200, 
+modlistA[[25]] <- lm(pollution_index ~ heat_binglog300*heatOSMAADTlog300*heatOSMgradientlog200 +
+                       heatbustransitlog300, 
                      data = pollutfieldclean_cast)
 summary(modlistA[[25]])
 plot(modlistA[[25]])
 
-modlistA[[26]] <- lm(pollution_index ~ heat_binglog300*heatOSMAADTlog50*poly(heatOSMgradientlog200,2) +
-                       heatbustransitlog200, 
+modlistA[[26]] <- lm(pollution_index ~ heat_binglog300*heatOSMAADTlog300*poly(heatOSMgradientlog200,2) +
+                       heatbustransitlog300, 
                      data = pollutfieldclean_cast)
 summary(modlistA[[26]])
 plot(modlistA[[26]])
 
+#-------- 3. Make plots ----
 #Models 19 and 24 so far are pretty damn good
 predf <- cbind(pollutfieldclean_cast, predict(modlistA[[24]], interval = 'confidence'))
 ggplot(predf,aes(x=fit, y=pollution_index)) + 
@@ -2166,16 +2191,61 @@ ggplot(predf,aes(x=fit, y=pollution_index)) +
   coord_fixed() + 
   theme_classic()
 
+#-------- 4. Make latex model summary table ----
+model_summary <- as.data.table(
+  ldply(modlistA, function(mod) {
+    sumod <- summary(mod)
+    formula_in <- as.character(mod$call[[2]])[3]
+    formula_out <- paste(signif(mod$coefficients, 2), 
+                         gsub('heat_*|OSM|log|\\(Intercept\\)', '', names(mod$coefficients)))
+    formula_out <- gsub('_','\\\\_', formula_out)
+    formula_out <- c(formula_out, rep('', 17-length(formula_out)))
+    sigcoefs <- which(sumod$coefficients[,'Pr(>|t|)']<0.05)
+    formula_out[sigcoefs] <- paste0('\\textbf{', formula_out[sigcoefs], '}')
+    
+    c(formula_out,
+      nvars = length(unique(strsplit(gsub('\\s', '', mod$call[[2]]), '[*+:]')[[3]])), #Number of unique variables used (to check amount of pre-computing required)
+      nsig = paste(length(sigcoefs),nrow(sumod$coefficients),sep='/'), #Proportion of significant coefficients
+      ShapiroWilkp = ols_test_normality(mod)$shapiro$p.value, #Test of normality of residuals - H0: residuals are normal
+      BreuschPagan_fitp = ols_test_breusch_pagan(mod)$p, #Test of homoscedasticity of residuals vs. response, assumes indep and normally distributed - H0: variance is constant
+      Score_fitp = ols_test_score(mod)$p, #Test of homoscedasticity of residuals vs. fitted, assume iid - Ho: variance is homogenous
+      AICc = round(AICcmodavg::AICc(mod)), 
+      R2 =  round(sumod$r.squared, 2), 
+      R2adj = round(sumod$adj.r.squared, 2),
+      RMSE = round(RMSE(mod),2), MAE=round(MAE(mod),2))
+  })
+)
+
+setkey(model_summary, AICc)  
+ltable <- print(xtable(model_summary), type="latex", 
+                booktabs=TRUE, #format table
+                sanitize.text.function = identity, #Disable sanitizing to allow for latex formatting to be kept intact
+                comment = FALSE, #remove comment at beggining of table about xtable production
+                file='')
+ltable_edit <- gsub('\\begin{table}', 
+                    paste('\\documentclass{article}',
+                          '\\usepackage[paperheight=8.5in,paperwidth=50in,margin=0.1in,headheight=0.0in,footskip=0.5in,includehead,includefoot]{geometry}',
+                          '\\usepackage{booktabs}',
+                          '\\begin{document}',
+                          '\\setlength{\\tabcolsep}{2pt}',
+                          '\\begin{table}', sep='\n'), 
+                    ltable, fixed=TRUE)
+ltable_edit <- gsub('\\end{table}', 
+                    paste('\\end{table}','\\end{document}', sep='\n'),
+                    ltable_edit, fixed=TRUE)
+     
+cat(ltable_edit, file = file.path(moddir, 'pollutionindex_modeltable.tex'))
+setwd(moddir)
+texi2pdf(file.path(moddir, 'pollutionindex_modeltable.tex'))
+
+#Add more models
+#Add VIF + test results for normality and homoscedacity of residuals
+#Predicted R-square/k-fold validation
+
 #---- B. Synthetic index ~ PC ----
 #---- C. Individual pollutants ~ separate predictors ----
 #---- C. Individual pollutants ~ PC ----
 
-
-# check lots of residuals - test assumption of independence and normality of residuals (useful list of plots https://newonlinecourses.science.psu.edu/stat501/node/317/)
-# Think of how to deal with spatial dependence: kriging or k-fold regression
-# Might use bootstrapping and k-fold validation
-# Could also use a model averaging approach
-# examine impact of method
 
 ############################################################################################################################################
 
