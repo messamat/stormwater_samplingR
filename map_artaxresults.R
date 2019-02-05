@@ -167,7 +167,7 @@ ols_plot_dfbetas_custom <- function(model) {
 }
 
 chemregdiagnostic_custom <- function(model, df, chem, flagcol, 
-                                 CooksOut = FALSE, DFBETAOut = FALSE, tresids = FALSE) {
+                                     CooksOut = FALSE, DFBETAOut = FALSE, tresids = FALSE) {
   "Set of diagnostic tests and plots to detect influential and outlying points.
   Note: modifies df in place by adding flags based on test results
   See https://cran.r-project.org/web/packages/olsrr/vignettes/influence_measures.html for plot examples"
@@ -194,7 +194,7 @@ chemregdiagnostic_custom <- function(model, df, chem, flagcol,
   
   outliernums <- unique(bind_rows(ols_plot_dfbetas_custom(model)$outliers)$obs)
   if (DFBETAOut) {
-  df[which(df$Elem == chem)[outliernums], (flagcol) := get(flagcol) +1]
+    df[which(df$Elem == chem)[outliernums], (flagcol) := get(flagcol) +1]
   }
   
   #Externaly deleted studentized residuals vs. leverage
@@ -244,8 +244,9 @@ ols_noplot_resid_lev <- function(mod){
   res
 }
 
-mod <- modlistA[[10]]
-regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', labelvec = NULL) {
+#mod <- modlistA[[10]]
+regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', labelvec = NULL,
+                                    kCV = TRUE, k=10, cvreps=20) {
   "Options for remove_outliers: none, outliers, outliers & leverage"
   if (remove_outliers != 'none') {
     if (remove_outliers == 'outliers') {
@@ -256,8 +257,35 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
     }
     datasub <- if (length(outrows) > 0) mod$model[-outrows, , drop = FALSE] else mod$model
     mod <- lm(formula=as.formula(mod$call$formula), data=datasub)
-    outliers <- if (!is.null(labelvec)) paste(labelvec[outrows], collapse='\\,') else NULL
+    outlierlist <- if (!is.null(labelvec)) paste(labelvec[outrows], collapse='\\,') else NULL
+  } else {
+    outlierlist <- NULL
   }
+  
+  if (kCV) {
+    if (length(mod$coefficients) > 1) {
+      ctrl <- trainControl(method = "repeatedcv",
+                           number = k,
+                           repeats = cvreps)
+      
+      modcv <- train(form = as.formula(mod$call$formula), 
+                     data = mod$model,
+                     method = "lm",
+                     trControl = ctrl)
+      
+      kCVresults <- setDT(modcv$resample)[, sapply(.SD, function(x) {
+        paste0(round(mean(x),2), '\\big(', 
+               round(quantile(x, .20),2), '\\textendash', 
+               round(quantile(x, .80), 2), '\\big)')}),
+        .SDcols= c('Rsquared', 'RMSE', 'MAE')]
+      names(kCVresults) <- c('R2cv', 'RMSEcv', 'MAEcv')
+    } else {
+      kCVresults <- c('R2cv'= '', 'RMSEcv'= '', 'MAEcv'= '')
+    }
+  } else {
+    kCVresults <- NULL
+  }
+  
   sumod <- summary(mod)
   formula_out <- paste(signif(mod$coefficients, 2), 
                        gsub('heat_*|OSM|log|\\(Intercept\\)', '', names(mod$coefficients)))
@@ -266,6 +294,7 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
   formula_out <- c(formula_out, rep('', maxpar-length(formula_out)))
   sigcoefs <- which(sumod$coefficients[,'Pr(>|t|)']<0.05)
   formula_out[sigcoefs] <- paste0('\\textbf{', formula_out[sigcoefs], '}')
+  names(formula_out) <- paste0('V', 1:length(formula_out))
   
   #Prepare VIF columns
   if (length(mod$coefficients) > 2) {
@@ -274,11 +303,11 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
     vifcols <- rep('', maxpar)
   }
   names(vifcols) <- paste0('VIF', 2:(maxpar+1))
-
+  
   c(formula_out,
     nvars = length(unique(unlist(
       strsplit(gsub('\\s', '', names(mod$coefficients)[names(mod$coefficients)!='(Intercept)']),'[*+:]')
-      ))), #Number of unique variables used (to check amount of pre-computing required)
+    ))), #Number of unique variables used (to check amount of pre-computing required)
     nsig = paste(length(sigcoefs),nrow(sumod$coefficients),sep='/'), #Proportion of significant coefficients
     ShapiroWilkp = round(ols_test_normality(mod)$shapiro$p.value,2), #Test of normality of residuals - H0: residuals are normal
     'BreuschPagan\\_fitp' = round(ols_test_breusch_pagan(mod)$p, 2), #Test of homoscedasticity of residuals vs. response, assumes indep and normally distributed - H0: variance is constant
@@ -287,10 +316,11 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
     R2 =  round(sumod$r.squared, 2), 
     R2adj = round(sumod$adj.r.squared, 2),
     R2pred = round(ols_pred_rsq(mod), 2),
-    RMSE = round(RMSE(mod),2), 
-    MAE=round(MAE(mod),2),
+    RMSE = round(DescTools::RMSE(mod),2), 
+    MAE=round(DescTools::MAE(mod),2),
+    kCVresults,
     vifcols,
-    outliers = outliers)
+    outliers = outlierlist)
 }
 
 heatlab <- function(x) {
@@ -313,7 +343,7 @@ corr_heatmap <- function(xmat=matrix, ymat=NULL, clus=TRUE) {
     cormat[lower.tri(cormat)]<- NA
     return(cormat)
   }
-
+  
   reorder_cormat <- function(cormat){
     # Use correlation between variables as distance
     if (is.null(ymat)) {
@@ -336,7 +366,7 @@ corr_heatmap <- function(xmat=matrix, ymat=NULL, clus=TRUE) {
   } else {
     melted_cormat <- melt(cormat, na.rm = TRUE)
   }
-
+  
   # Create a ggheatmap
   ggheatmap <- ggplot(melted_cormat, aes(Var2, Var1, fill = value))+
     geom_tile(color = "white")+
@@ -413,6 +443,27 @@ pcabiplot_grid <- function(dt, cols, idcols, nPCs=NULL, scload=1) {
   })
   #Plot, only keeping unique combinations by grabbing lower triangle of plot matrix
   do.call("grid.arrange", list(grobs=biplots_l[lower.tri(biplots_l, diag=T)], ncol=nPCs-1)) 
+}
+
+latex_format <- function(summary_table) {
+  ltable <- print(xtable(summary_table), type="latex", 
+                  booktabs=TRUE, #format table
+                  sanitize.text.function = identity, #Disable sanitizing to allow for latex formatting to be kept intact
+                  comment = FALSE, #remove comment at beggining of table about xtable production
+                  file='')
+  #Embed table within a latex document, adjusting width and height, etc.
+  ltable_edit <- gsub('\\begin{table}', 
+                      paste('\\documentclass{article}',
+                            '\\usepackage[paperheight=8.5in,paperwidth=28in,margin=0.1in,headheight=0.0in,footskip=0.5in,includehead,includefoot]{geometry}',
+                            '\\usepackage{booktabs}',
+                            '\\begin{document}',
+                            '\\setlength{\\tabcolsep}{2pt}',
+                            '\\begin{table}', sep='\n'), 
+                      ltable, fixed=TRUE)
+  ltable_edit <- gsub('\\end{table}', 
+                      paste('\\end{table}','\\end{document}', sep='\n'),
+                      ltable_edit, fixed=TRUE)
+  return(ltable_edit)
 }
 
 ###########################################################################################################################################
@@ -497,7 +548,7 @@ ICPthresholds <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_1206
 rownames(ICPthresholds) <- gsub('\\W', '', ICPthresholds[,1])
 ICPthresholds_format <- as.data.table(t(ICPthresholds[,-1])) %>%
   .[, Elem := colnames(ICPthresholds)[-1]]
-  
+
 ########### ---- F. Import GIS data (including pollution variables) ---- ####
 trees <- as.data.table(readOGR(dsn = file.path(resdir, 'Seattle_sampling.gdb'), layer = 'XRFsites_proj'))
 #summary(trees)
@@ -536,8 +587,8 @@ labXRFcastnorm <- labXRFcast[, lapply(.SD, function(x) {x/Rh}), by = XRFID]
 fieldt <- setDT(fieldata_format)[fieldXRFcastnorm, on='XRFID']
 
 labXRFcastnorm[, `:=`(SiteID = gsub('[A-B].*', '', XRFID),
-                  Pair = gsub('[0-9_]+', '', XRFID),
-                  XRFID = NULL)]
+                      Pair = gsub('[0-9_]+', '', XRFID),
+                      XRFID = NULL)]
 labdt <- setDT(fieldata_sel)[labXRFcastnorm, on =  .(SiteID, Pair)]
 
 # ---- 4. Compute average, sd, and range for lab XRF results over multiple measurements for a given pellet ----
@@ -547,8 +598,8 @@ lab_artaxstats <- labdt[, sapply(.SD, function(x) list(mean=mean(x, na.rm=T),
                                                        range=max(x,na.rm=TRUE)-min(x,na.rm=TRUE))), 
                         by=c('SiteID','Pair'), .SDcols = elemcols]
 setnames(lab_artaxstats, c('SiteID', 'Pair', 
-                             paste(rep(colnames(labdt)[elemcols],each=3),
-                                   c('mean', 'sd', 'range'), sep='_')))
+                           paste(rep(colnames(labdt)[elemcols],each=3),
+                                 c('mean', 'sd', 'range'), sep='_')))
 
 labXRF_format <- melt(lab_artaxstats, id.vars=c('SiteID','Pair'), variable.name='Elem_stats') %>%
   .[, `:=`(Elem = sub('(.*)[_](.*)', '\\1', Elem_stats),
@@ -610,14 +661,14 @@ fieldXRF_format[, transmean:=scale(transmean), by=Elem]
 # ---- 8. Check lab XRF data distribution by element then transform and standardize ----
 #Use Tukey ladder computation to determine each variable's transformation (only on numeric columns with more than 1 unique observation)
 labXRF_format[Elem %in% labXRF_format[, length(unique(mean))>1, by=Elem][V1==T, Elem],
-                transmean := transformTukey_lambda(mean, start = -2, end = 2,int = 0.025, 
-                                                   rastertab=F,rep=100, verbose = FALSE, 
-                                                   statistic = 1)[[1]], by=Elem]
+              transmean := transformTukey_lambda(mean, start = -2, end = 2,int = 0.025, 
+                                                 rastertab=F,rep=100, verbose = FALSE, 
+                                                 statistic = 1)[[1]], by=Elem]
 
 #Run a shapiro test on each element
 lab_transmean <- dcast(labXRF_format, SiteID+Pair~Elem, value.var = 'transmean') 
 normtest <- shapiro_test_df(lab_transmean[,sapply(lab_transmean, class)=='numeric' &
-                                              sapply(lab_transmean, function(x) length(unique(x)))>1, with=F])
+                                            sapply(lab_transmean, function(x) length(unique(x)))>1, with=F])
 normsig <- data.frame(sig = normtest$significance)
 normsig$Elem <- row.names(normsig)
 #Plot histogram of transformed data color-coded by whether normally distributed or not
@@ -675,14 +726,14 @@ ICPmelt[, `:=`(SiteID = gsub('[A-Z]', '', SAMPLE.SET),
 # ---- 3. Check ICP data distribution by element then transform and standardize ----
 #Use Tukey ladder computation to determine each variable's transformation (only on numeric columns with more than 1 unique observation)
 ICPmelt[Elem %in% ICPmelt[, length(unique(ICP))>1, by=Elem][V1==T, Elem],
-                transICP := transformTukey_lambda(ICP, start = -2, end = 2,int = 0.025, 
-                                                   rastertab=F,rep=100, verbose = FALSE, 
-                                                   statistic = 1)[[1]], by=Elem]
+        transICP := transformTukey_lambda(ICP, start = -2, end = 2,int = 0.025, 
+                                          rastertab=F,rep=100, verbose = FALSE, 
+                                          statistic = 1)[[1]], by=Elem]
 
 #Run a shapiro test on each element
 ICP_trans <- dcast(ICPmelt, SiteID+Pair~Elem, value.var = 'transICP') 
 normtest <- shapiro_test_df(ICP_trans[,sapply(ICP_trans, class)=='numeric' &
-                                              sapply(ICP_trans, function(x) length(unique(x)))>1, with=F])
+                                        sapply(ICP_trans, function(x) length(unique(x)))>1, with=F])
 normsig <- data.frame(sig = normtest$significance)
 normsig$Elem <- row.names(normsig)
 #Plot histogram of transformed data color-coded by whether normally distributed or not
@@ -708,15 +759,15 @@ ICP_trans <- dcast(ICPmelt, SiteID+Pair~Elem, value.var='transICP')
 #Use Tukey ladder computation to determine each variable's transformation (only on numeric columns with more than 1 unique observation)
 treesmelt <- melt(trees[!is.na(SiteID),], id.vars=grep('heat|NLCD', colnames(trees),
                                                        ignore.case=T, value=T, invert=T), 
-                   variable.name = 'pollutvar' , value.name = 'pollutvalue')
+                  variable.name = 'pollutvar' , value.name = 'pollutvalue')
 treesmelt[, transpollut := transformTukey_lambda(pollutvalue, start = -2, end = 2,int = 0.025, 
-                                          rastertab=F,rep=100, verbose = FALSE, 
-                                          statistic = 1)[[1]], by=pollutvar]
+                                                 rastertab=F,rep=100, verbose = FALSE, 
+                                                 statistic = 1)[[1]], by=pollutvar]
 #Run a shapiro test on each element
 trees_trans <- dcast(treesmelt, SiteID+Pair~pollutvar, value.var = 'transpollut') 
 
 normtest <- shapiro_test_df(trees_trans[,sapply(trees_trans, class)=='numeric' &
-                                        sapply(trees_trans, function(x) length(unique(x)))>1, with=F])
+                                          sapply(trees_trans, function(x) length(unique(x)))>1, with=F])
 normsig <- data.frame(sig = normtest$significance)
 normsig$pollutvar <- row.names(normsig)
 #Plot histogram of transformed data color-coded by whether normally distributed or not
@@ -881,8 +932,8 @@ excol2 <- c('As', 'Cd', 'Mo', 'Na', 'Se', 'Si') #Exclude columns that are very f
 fieldXRF_format[(cv>(meanCV+2*sdCV)) & !(Elem %in% excol) & !is.na(cv),
                 CVflag_count_field := .N, by=.(SiteID, Pair)][
                   , CVflag_count_field := ifelse(is.na(CVflag_count_field) | is.na(cv), 
-                                           as.integer(round(mean(CVflag_count_field, na.rm=T))),
-                                           CVflag_count_field),
+                                                 as.integer(round(mean(CVflag_count_field, na.rm=T))),
+                                                 CVflag_count_field),
                   by=.(SiteID, Pair)][
                     is.na(CVflag_count_field), CVflag_count_field := 0]
 
@@ -920,7 +971,7 @@ ggplot(outlierdat_distmelt, aes(x='O', y=value, color=aqplot_outliers)) +
 
 ### ---- Outliers in relationship between field XRF and (lab XRF | ICP | pollutant drivers) ----
 # ---- 7. Multivariate relationship to ICP-OES for the purpose of outlier detection ----
-  #RDA requirements: Y and X must be centered and Y must be standardized; collinearity among X variables should be reduced prior to RDA
+#RDA requirements: Y and X must be centered and Y must be standardized; collinearity among X variables should be reduced prior to RDA
 
 #Only keep sites and elements that are in both ICP and field XRF
 field_ICP_sites <- do.call(paste0,
@@ -1009,8 +1060,8 @@ fieldlab_rda_resid <- rda_fitresid[, list(fieldlab_rda_resid = mean(residuals)),
 # ---- 9. Multivariate relationship to pollution predictors for the purpose of outlier detection  ---- 
 #Format data
 trees_fieldxrf_trans_melt <- melt(trees_fieldxrf_trans[,-c(excol, excol2), with=F], 
-                            id.vars=colnames(trees_fieldxrf_trans)[!(colnames(trees_fieldxrf_trans) %in% periodicTable$symb)], 
-                            variable.name = 'Elem') %>%
+                                  id.vars=colnames(trees_fieldxrf_trans)[!(colnames(trees_fieldxrf_trans) %in% periodicTable$symb)], 
+                                  variable.name = 'Elem') %>%
   merge(periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
 fieldrdaformat <- as.matrix(trees_fieldxrf_trans[, setdiff(
@@ -1193,7 +1244,7 @@ for (chem in unique(pollutfieldmerge$Elem)) {
 
 #Plot predicted field XRF ~ observed field XRF
 pollutfield_plot <- ggplot(pollutfieldmerge[!(Elem %in% c(excol, excol2, NA)),], 
-                        aes(x=pollutpred, y=mean, group=1, color=factor(pollutfield_flags))) + 
+                           aes(x=pollutpred, y=mean, group=1, color=factor(pollutfield_flags))) + 
   geom_linerange(aes(ymin=mean-sd, ymax=mean+sd), alpha=1/2) + 
   geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
   geom_smooth(method='lm') +
@@ -1220,8 +1271,8 @@ ggsave(file.path(inspectdir, 'fieldpollut_all.png'),
 
 #Investigate determinants of R2
 pollutmeanR2 <- unique(pollutfieldmerge[, list(meanXRF = mean(mean, na.rm=T),
-                                         R2 = pollutfieldR2), by=Elem][
-                                           keVmaxnet, on='Elem==Element'])
+                                               R2 = pollutfieldR2), by=Elem][
+                                                 keVmaxnet, on='Elem==Element'])
 ggplot(pollutmeanR2, aes(x=meanXRF, y=R2)) + 
   geom_text(aes(label=Elem)) +
   scale_x_log10() + 
@@ -1277,7 +1328,7 @@ fieldXRF_formatflags_u <- unique(
                                  grep('flag.*sum', colnames(fieldXRF_formatflags), value=T))])
 
 ggplot(fieldXRF_formatflags_u, aes(x=ICPfield_flags_sum, y=labfield_flags_sum, 
-                                 label=paste0(SiteID, Pair), color = CVflag_count_field)) + 
+                                   label=paste0(SiteID, Pair), color = CVflag_count_field)) + 
   scale_color_distiller(palette='YlGnBu') +
   geom_text(position = position_jitter(width=0.25, height=0.25), size=5) 
 
@@ -1305,8 +1356,8 @@ leaflet(data = outlierlocs) %>% addTiles() %>%
 # ---- 1. Assess within-pellet variability ----
 #Plot coefficient of variation distributions for every element
 cvmean_labeltree <- as.data.frame(labXRF_format[!(labXRF_format$Elem %in% c('Rh','Pd','Ar')),
-                                                  paste0('Mean CV: ',format(mean(cv, na.rm=T),digits=2)),
-                                                  by=name])
+                                                paste0('Mean CV: ',format(mean(cv, na.rm=T),digits=2)),
+                                                by=name])
 ggplot(labXRF_format[!(labXRF_format$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
   geom_density() +
   facet_wrap(~name, scales='free') + 
@@ -1340,13 +1391,13 @@ for (elem in unique(labXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
 lab_artaxmeansite <- labdt[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=29:51]
 artaxsdsite <- labdt[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=29:51]
 labXRF_formatsite <- merge(melt(lab_artaxmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
-                             melt(artaxsdsite, id.vars='SiteID', variable.name='Elem', value.name='sd'),
-                             by=c('SiteID','Elem')) %>%
+                           melt(artaxsdsite, id.vars='SiteID', variable.name='Elem', value.name='sd'),
+                           by=c('SiteID','Elem')) %>%
   .[, cv := sd/mean] %>%
   merge(periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 cvmean_labelsite <- as.data.frame(labXRF_formatsite[!(labXRF_formatsite$Elem %in% c('Rh','Pd','Ar')),
-                                                      paste0('Mean CV: ',format(mean(cv, na.rm=T),digits=2)),
-                                                      by=name])
+                                                    paste0('Mean CV: ',format(mean(cv, na.rm=T),digits=2)),
+                                                    by=name])
 
 ggplot(labXRF_formatsite[!(labXRF_formatsite$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
   geom_density()+
@@ -1380,16 +1431,16 @@ for (elem in unique(labXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
 }
 # ---- 3. Univariate flag based on within-tree CV for metals with CV < 0.5----
 labXRF_format[, `:=`(meanCV=mean(cv, na.rm=T),
-                       sdCV = sd(cv, na.rm=T)), by=Elem]
+                     sdCV = sd(cv, na.rm=T)), by=Elem]
 
 #NAcount <- function(x) length(which(!is.na(unlist(x))))
 labXRF_format[(cv>(meanCV+2*sdCV)) & !(Elem %in% excol) & !is.na(cv),
-                CVflag_count_lab := .N, by=.(SiteID, Pair)][
-                  , CVflag_count_lab := ifelse(is.na(CVflag_count_lab) | is.na(cv), 
-                                           as.integer(round(mean(CVflag_count_lab, na.rm=T))),
-                                           CVflag_count_lab),
-                  by=.(SiteID, Pair)][
-                    is.na(CVflag_count_lab), CVflag_count_lab := 0]
+              CVflag_count_lab := .N, by=.(SiteID, Pair)][
+                , CVflag_count_lab := ifelse(is.na(CVflag_count_lab) | is.na(cv), 
+                                             as.integer(round(mean(CVflag_count_lab, na.rm=T))),
+                                             CVflag_count_lab),
+                by=.(SiteID, Pair)][
+                  is.na(CVflag_count_lab), CVflag_count_lab := 0]
 
 
 # ---- 4. Univariate relationship to ICP-OES for the purpose of outlier detection ----
@@ -1406,8 +1457,8 @@ for (chem in unique(ICPlabmerge$Elem)) {
 
 #Plot lab XRF ~ ICP data
 ICPlab_plot <- ggplot(ICPlabmerge[!(is.na(ICP) |  
-                                          Elem %in% c(excol, excol2)),], 
-                        aes(x=mean, y=ICP, color=factor(ICPlab_flags), group=1)) + 
+                                      Elem %in% c(excol, excol2)),], 
+                      aes(x=mean, y=ICP, color=factor(ICPlab_flags), group=1)) + 
   geom_linerangeh(aes(xmin=mean-sd, xmax=mean+sd), alpha=1/2) + 
   geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
   #scale_color_distiller(palette= 'Spectral') +
@@ -1429,9 +1480,9 @@ ICPlab_plot
 
 #Investigate determinants of R2
 ICPmeanR2 <- unique(ICPlabmerge[, list(meanXRF = mean(mean, na.rm=T),
-                                         meanICP = mean(ICP, na.rm=T),
-                                         R2 = ICPlabR2), by=Elem][
-                                           keVmaxnet, on='Elem==Element'])
+                                       meanICP = mean(ICP, na.rm=T),
+                                       R2 = ICPlabR2), by=Elem][
+                                         keVmaxnet, on='Elem==Element'])
 ggplot(ICPmeanR2, aes(x=meanXRF, y=R2)) + 
   geom_text(aes(label=Elem)) +
   scale_x_log10() + 
@@ -1466,17 +1517,17 @@ for (chem in unique(pollutlabmerge$Elem)) {
   print(chem)
   pollutlab_lm <- lm(mean ~  heat_binglog300*heatOSMAADTlog300*heatOSMgradientlog200*nlcd_imp_ps +
                        heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog200, 
-                       data = pollutlabmerge[Elem == chem,])
+                     data = pollutlabmerge[Elem == chem,])
   ggsave(file.path(inspectdir, paste0('labpollution_regoutliers', chem, '.png')),
          chemregdiagnostic_custom(pollutlab_lm, pollutlabmerge, chem,  flagcol = 'pollutlab_flags', tresids = TRUE),
          width = 20, height=12, units='in', dpi=300)
   pollutlabmerge[Elem == chem, `:=`(pollutpred = fitted(pollutlab_lm),
-                                      pollutlabR2 = summary(pollutlab_lm)$adj.r.squared)]
+                                    pollutlabR2 = summary(pollutlab_lm)$adj.r.squared)]
 }
 
 #Plot predicted lab XRF ~ observed lab XRF
 pollutlab_plot <- ggplot(pollutlabmerge[!(Elem %in% c(excol, excol2, NA)),], 
-                           aes(x=pollutpred, y=mean, group=1, color=factor(pollutlab_flags))) + 
+                         aes(x=pollutpred, y=mean, group=1, color=factor(pollutlab_flags))) + 
   geom_linerange(aes(ymin=mean-sd, ymax=mean+sd), alpha=1/2) + 
   geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
   geom_smooth(method='lm') +
@@ -1501,8 +1552,8 @@ ggsave(file.path(inspectdir, 'labpollution_all.png'),
 
 #Investigate determinants of R2
 pollutmeanR2 <- unique(pollutlabmerge[, list(meanXRF = mean(mean, na.rm=T),
-                                               R2 = pollutlabR2), by=Elem][
-                                                 keVmaxnet, on='Elem==Element'])
+                                             R2 = pollutlabR2), by=Elem][
+                                               keVmaxnet, on='Elem==Element'])
 ggplot(pollutmeanR2, aes(x=meanXRF, y=R2)) + 
   geom_text(aes(label=Elem)) +
   scale_x_log10() + 
@@ -1526,7 +1577,7 @@ ggplot(pollutmeanR2, aes(x=noise, y=R2)) +
 ### ---- 6. Compile outlier flags ----
 #Merge all flag datasets
 labXRF_formatflags <- merge(labXRF_format, ICPlabmerge[, .(SiteID, Pair, Elem, ICPlab_flags, ICPlabR2)], 
-                              by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
+                            by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
   merge(labfieldmerge[, .(SiteID, Pair, Elem, labfield_flags, labfieldR2)], 
         by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
   merge(pollutlabmerge[, .(SiteID, Pair, Elem, pollutlab_flags, pollutlabR2)], 
@@ -1542,39 +1593,39 @@ ggplot(labXRF_formatflags, aes(x=labfieldR2, y=pollutlabR2, label=Elem)) +
 flagelems <- labXRF_formatflags[, min(ICPlabR2, labfieldR2, pollutlabR2, na.rm=T)>0.20, by=Elem][
   V1==TRUE & Elem != 'Rh', Elem]
 labXRF_formatflags[Elem %in% flagelems,
-                     flagpartsum_lab := sum(ICPlab_flags, labfield_flags, pollutlab_flags, na.rm=T), 
-                     by=.(SiteID, Pair)][
-                       , flagsum_lab := sum(flagpartsum_lab, CVflag_count_lab, na.rm=T), by=.(SiteID, Pair)]
+                   flagpartsum_lab := sum(ICPlab_flags, labfield_flags, pollutlab_flags, na.rm=T), 
+                   by=.(SiteID, Pair)][
+                     , flagsum_lab := sum(flagpartsum_lab, CVflag_count_lab, na.rm=T), by=.(SiteID, Pair)]
 
 #Check total number of flags by each type of flag
 labXRF_formatflags[Elem %in% flagelems,
-                     `:=`(ICPlab_flags_sum = sum(ICPlab_flags, na.rm=T),
-                          labfield_flags_sum = sum(labfield_flags, na.rm=T),
-                          pollutlab_flags_sum = sum(pollutlab_flags, na.rm=T)),
-                     by=.(SiteID, Pair)]
+                   `:=`(ICPlab_flags_sum = sum(ICPlab_flags, na.rm=T),
+                        labfield_flags_sum = sum(labfield_flags, na.rm=T),
+                        pollutlab_flags_sum = sum(pollutlab_flags, na.rm=T)),
+                   by=.(SiteID, Pair)]
 
 labXRF_formatflags_u <- unique(
   labXRF_formatflags[!is.na(flagpartsum_lab),
-                       .SD, 
-                       .SDcols=c('SiteID', 'Pair', 'CVflag_count_lab',
-                                 grep('flag.*sum', colnames(labXRF_formatflags), value=T))])
+                     .SD, 
+                     .SDcols=c('SiteID', 'Pair', 'CVflag_count_lab',
+                               grep('flag.*sum', colnames(labXRF_formatflags), value=T))])
 
 ggplot(labXRF_formatflags_u, aes(x=ICPlab_flags_sum, y=labfield_flags_sum, 
-                                   label=paste0(SiteID, Pair), color = CVflag_count_lab)) + 
+                                 label=paste0(SiteID, Pair), color = CVflag_count_lab)) + 
   scale_color_distiller(palette='YlGnBu') +
   geom_text(position = position_jitter(width=0.25, height=0.25), size=5) 
 
 ggplot(labXRF_formatflags_u, aes(x=ICPlab_flags_sum, y=pollutlab_flags_sum, 
-                                   label=paste0(SiteID, Pair), color = CVflag_count_lab)) + 
+                                 label=paste0(SiteID, Pair), color = CVflag_count_lab)) + 
   scale_color_distiller(palette='YlGnBu') + 
   geom_text(position = position_jitter(width=0.25, height=0.25), size=5)
 
 #Records to inspect
 flagelems
 labXRF_inspect <- unique(labXRF_formatflags[(ICPlab_flags_sum>5) | 
-                                                  (labfield_flags_sum > 5) | 
-                                                  (pollutlab_flags_sum > 5), 
-                                                .(SiteID, Pair)])
+                                              (labfield_flags_sum > 5) | 
+                                              (pollutlab_flags_sum > 5), 
+                                            .(SiteID, Pair)])
 outliertrees <- trees[labXRF_inspect, on=c('SiteID', 'Pair')]
 outlierlocs <- SpatialPointsDataFrame(coords = data.frame(outliertrees$POINT_X, outliertrees$POINT_Y),
                                       data= as.data.frame(outliertrees))
@@ -1592,13 +1643,13 @@ ICPmeansite <- ICPmean[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'),
 ICPsdsite <- ICPmean[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), 
                      .SDcols=which(colnames(ICPmean) %in% periodicTable$symb)]
 ICP_formatsite <- merge(melt(ICPmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
-                           melt(ICPsdsite, id.vars='SiteID', variable.name='Elem', value.name='sd'),
-                           by=c('SiteID','Elem')) %>%
+                        melt(ICPsdsite, id.vars='SiteID', variable.name='Elem', value.name='sd'),
+                        by=c('SiteID','Elem')) %>%
   .[, cv := sd/mean] %>%
   merge(periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 cvmean_labelsite <- as.data.frame(ICP_formatsite[!(ICP_formatsite$Elem %in% c('Rh','Pd','Ar')),
-                                                    paste0('Mean CV: ',format(mean(cv, na.rm=T),digits=2)),
-                                                    by=name])
+                                                 paste0('Mean CV: ',format(mean(cv, na.rm=T),digits=2)),
+                                                 by=name])
 
 ggplot(ICP_formatsite[!(ICP_formatsite$Elem %in% c('Rh','Pd','Ar')),], aes(x=cv, fill=name)) + 
   geom_density()+
@@ -1637,17 +1688,17 @@ for (chem in unique(pollutICPmerge[!is.na(Elem), Elem])) {
   print(chem)
   pollutICP_lm <- lm(ICP ~  heat_binglog300*heatOSMAADTlog300*heatOSMgradientlog200*nlcd_imp_ps +
                        heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog200, 
-                       data = pollutICPmerge[Elem == chem,])
+                     data = pollutICPmerge[Elem == chem,])
   ggsave(file.path(inspectdir, paste0('ICPpollution_regoutliers', chem, '.png')),
          chemregdiagnostic_custom(pollutICP_lm, pollutICPmerge, chem,  flagcol = 'pollutICP_flags', tresids = TRUE),
          width = 20, height=12, units='in', dpi=300)
   pollutICPmerge[Elem == chem, `:=`(pollutpred = fitted(pollutICP_lm),
-                                      pollutICPR2 = summary(pollutICP_lm)$adj.r.squared)]
+                                    pollutICPR2 = summary(pollutICP_lm)$adj.r.squared)]
 }
 
 #Plot predicted ICP ~ observed ICP 
 pollutICP_plot <- ggplot(pollutICPmerge[!(Elem %in% c(excol, excol2, NA)),], 
-                           aes(x=pollutpred, y=ICP, group=1, color=factor(pollutICP_flags))) + 
+                         aes(x=pollutpred, y=ICP, group=1, color=factor(pollutICP_flags))) + 
   geom_text(aes(label = paste0(SiteID,Pair)), size=4, vjust="inward",hjust="inward") +
   geom_smooth(method='lm') +
   #scale_color_distiller(palette= 'Spectral') +
@@ -1672,8 +1723,8 @@ ggsave(file.path(inspectdir, 'ICPpollution_all.png'),
 
 #Investigate determinants of R2
 pollutmeanR2 <- unique(pollutICPmerge[, list(meanICP = mean(ICP, na.rm=T),
-                                               R2 = pollutICPR2), by=Elem])[
-                                                 ICPthresholds_format, on='Elem'
+                                             R2 = pollutICPR2), by=Elem])[
+                                               ICPthresholds_format, on='Elem'
                                                ]
 ggplot(pollutmeanR2, aes(x=meanICP, y=R2)) + 
   geom_text(aes(label=Elem)) +
@@ -1690,7 +1741,7 @@ ggplot(pollutmeanR2, aes(x=meanICP/QUANTLIM, y=R2)) +
 ### ---- 3. Compile outlier flags ----
 #Merge all flag datasets
 ICP_formatflags <- merge(fieldXRF_format, ICPfieldmerge[, .(SiteID, Pair, Elem, ICPfield_flags, ICPfieldR2)], 
-                              by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
+                         by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
   merge(ICPlabmerge[, .(SiteID, Pair, Elem, ICPlab_flags, ICPlabR2)], 
         by=c('SiteID', 'Pair', 'Elem'), all.x=T) %>%
   merge(pollutICPmerge[, .(SiteID, Pair, Elem, pollutICP_flags, pollutICPR2)], 
@@ -1706,39 +1757,39 @@ ggplot(ICP_formatflags, aes(x=ICPlabR2, y=pollutICPR2, label=Elem)) +
 flagelems <- ICP_formatflags[, min(ICPfieldR2, ICPlabR2, pollutICPR2, na.rm=T)>0.20, by=Elem][
   V1==TRUE & Elem != 'Rh', Elem]
 ICP_formatflags[Elem %in% flagelems,
-                     flagpartsum_ICP := sum(ICPfield_flags, ICPlab_flags, pollutICP_flags, na.rm=T), 
-                     by=.(SiteID, Pair)][
-                       , flagsum_ICP := sum(flagpartsum_ICP, CVflag_count_lab, na.rm=T)]
+                flagpartsum_ICP := sum(ICPfield_flags, ICPlab_flags, pollutICP_flags, na.rm=T), 
+                by=.(SiteID, Pair)][
+                  , flagsum_ICP := sum(flagpartsum_ICP, CVflag_count_lab, na.rm=T)]
 
 #Check total number of flags by each type of flag
 ICP_formatflags[Elem %in% flagelems,
-                     `:=`(ICPfield_flags_sum = sum(ICPfield_flags, na.rm=T),
-                          ICPlab_flags_sum = sum(ICPlab_flags, na.rm=T),
-                          pollutICP_flags_sum = sum(pollutICP_flags, na.rm=T)),
-                     by=.(SiteID, Pair)]
+                `:=`(ICPfield_flags_sum = sum(ICPfield_flags, na.rm=T),
+                     ICPlab_flags_sum = sum(ICPlab_flags, na.rm=T),
+                     pollutICP_flags_sum = sum(pollutICP_flags, na.rm=T)),
+                by=.(SiteID, Pair)]
 
 ICP_formatflags_u <- unique(
   ICP_formatflags[!is.na(flagpartsum_ICP),
-                       .SD, 
-                       .SDcols=c('SiteID', 'Pair',
-                                 grep('flag.*sum', colnames(ICP_formatflags), value=T))])
+                  .SD, 
+                  .SDcols=c('SiteID', 'Pair',
+                            grep('flag.*sum', colnames(ICP_formatflags), value=T))])
 
 ggplot(ICP_formatflags_u, aes(x=ICPfield_flags_sum, y=ICPlab_flags_sum, 
-                                   label=paste0(SiteID, Pair))) + 
+                              label=paste0(SiteID, Pair))) + 
   scale_color_distiller(palette='YlGnBu') +
   geom_text(position = position_jitter(width=0.25, height=0.25), size=5) 
 
 ggplot(ICP_formatflags_u, aes(x=ICPfield_flags_sum, y=pollutICP_flags_sum, 
-                                   label=paste0(SiteID, Pair))) + 
+                              label=paste0(SiteID, Pair))) + 
   scale_color_distiller(palette='YlGnBu') + 
   geom_text(position = position_jitter(width=0.25, height=0.25), size=5)
 
 #Records to inspect
 flagelems
 ICP_inspect <- unique(ICP_formatflags[(ICPfield_flags_sum>5) | 
-                                                  (ICPlab_flags_sum > 5) | 
-                                                  (pollutICP_flags_sum > 5), 
-                                                .(SiteID, Pair)])
+                                        (ICPlab_flags_sum > 5) | 
+                                        (pollutICP_flags_sum > 5), 
+                                      .(SiteID, Pair)])
 outliertrees <- trees[ICP_inspect, on=c('SiteID', 'Pair')]
 outlierlocs <- SpatialPointsDataFrame(coords = data.frame(outliertrees$POINT_X, outliertrees$POINT_Y),
                                       data= as.data.frame(outliertrees))
@@ -1746,7 +1797,7 @@ outlierlocs <- SpatialPointsDataFrame(coords = data.frame(outliertrees$POINT_X, 
 leaflet(data = outlierlocs) %>% addTiles() %>%
   addMarkers(clusterOptions = markerClusterOptions(),
              popup = ~paste0(SiteID, Pair))
- 
+
 ###################### ---- D. Compile all flags and make a flag matrix/heatmap then inspect data and decide on their fate ---- ####
 # ---- 1. Compile flags and make heatmap ----
 allflags <- ICP_formatflags_u[labXRF_formatflags_u, on=.(SiteID, Pair)][
@@ -2001,13 +2052,13 @@ pcabiplot_grid(pollutfieldclean_cast, nPCs = 5, cols = elemcols_sub,
 #Inspect components to decide which ones to predict
 loadings(pca)
 #There are no very distinct patterns - everything is pretty correlated:
-  #First component: Zn, Zr, Ti, Ni, Fe, Cu, and Cr load equally (0.33-0.36);
-  #                 Ca, K, and Pb a little less (0.20-25);
-  #                 Sr, and Mn not much (0.11-0.12)
-  #Second component:Ca, K, and Sr load the strongest (0.47-0.49)
-  #                 Pb and Mn load positively but not much (0.16)
-  #                 Cu and Ni are ~ 0
-  #                 Zn, Zr, Ti, Fe and Cr load negatively -0.11 to -0.30
+#First component: Zn, Zr, Ti, Ni, Fe, Cu, and Cr load equally (0.33-0.36);
+#                 Ca, K, and Pb a little less (0.20-25);
+#                 Sr, and Mn not much (0.11-0.12)
+#Second component:Ca, K, and Sr load the strongest (0.47-0.49)
+#                 Pb and Mn load positively but not much (0.16)
+#                 Cu and Ni are ~ 0
+#                 Zn, Zr, Ti, Fe and Cr load negatively -0.11 to -0.30
 
 #Select individual elements to predict separately: Zn, Fe, Cu, Pb
 
@@ -2070,7 +2121,7 @@ selcols <- c(selcols, 'heat_binglog300', 'nlcd_imp_ps', 'heatbustransitlog300',
 png(file.path(inspectdir, 'cormatrix_SelFieldElem_SelPollutionDrivers.png'), 
     width = 12, height=12, units='in', res=300)
 ggscatmat(as.data.frame(pollutfieldclean_cast[, selcols, with=F]),
-alpha=0.7)
+          alpha=0.7)
 dev.off()
 
 #---- F. Create a synthetic PCA-based pollution driver index  ----
@@ -2310,34 +2361,14 @@ ols_correlations(modlistA[[31]])
 #-------- 4. Make latex model summary table ----
 vnum <- max(sapply(modlistA, function(mod) {length(mod$coefficients)}))
 model_summary<- as.data.table(
-  ldply(modlistA, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum)}))
-
-latex_format <- function(summary_table) {
-  ltable <- print(xtable(summary_table), type="latex", 
-                  booktabs=TRUE, #format table
-                  sanitize.text.function = identity, #Disable sanitizing to allow for latex formatting to be kept intact
-                  comment = FALSE, #remove comment at beggining of table about xtable production
-                  file='')
-  ltable_edit <- gsub('\\begin{table}', 
-                      paste('\\documentclass{article}',
-                            '\\usepackage[paperheight=8.5in,paperwidth=25in,margin=0.1in,headheight=0.0in,footskip=0.5in,includehead,includefoot]{geometry}',
-                            '\\usepackage{booktabs}',
-                            '\\begin{document}',
-                            '\\setlength{\\tabcolsep}{2pt}',
-                            '\\begin{table}', sep='\n'), 
-                      ltable, fixed=TRUE)
-  ltable_edit <- gsub('\\end{table}', 
-                      paste('\\end{table}','\\end{document}', sep='\n'),
-                      ltable_edit, fixed=TRUE)
-  return(ltable_edit)
-}
-
+  ldply(modlistA, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
 setorder(model_summary, -R2pred, AICc)  
 cat(latex_format(model_summary), file = file.path(moddir, 'pollutionindex_modeltable.tex'))
 setwd(moddir)
 texi2pdf('pollutionindex_modeltable.tex')
 
 #-------- 4. Make latex model summary table when excluding outliers ----
+############ TROUBLESHOOT THAT ########
 model_summary_nooutliers <- as.data.table(
   ldply(modlistA, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, 
                                                          remove_outliers = 'outliers',
@@ -2349,10 +2380,7 @@ texi2pdf('pollutionindex_modeltable_nooutliers.tex')
 
 
 #TO DO: 
-#k-fold validation
 #check for error autocorrelation + influence of method on residuals
-
-
 #Select candidate model, check residual vs regressor, added variable plots, 
 
 #---- B. Synthetic index ~ PC ----
@@ -2361,11 +2389,6 @@ texi2pdf('pollutionindex_modeltable_nooutliers.tex')
 
 
 ############################################################################################################################################
-
-
-
-
-
 
 
 #--------------------------------------------------------------------------------------
