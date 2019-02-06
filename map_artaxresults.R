@@ -232,6 +232,7 @@ chemregdiagnostic_custom <- function(model, df, chem, flagcol,
 }
 
 ols_noplot_resid_lev <- function(mod){
+  #Run ols_plot_resid_lev without displaying a plot
   ff <- tempfile()
   png(filename=ff)
   res <- ols_plot_resid_lev(mod)
@@ -240,22 +241,43 @@ ols_noplot_resid_lev <- function(mod){
   res
 }
 
-#mod <- modlistA[[10]]
+#mod <- modlistA[[1]]
+# for (mod in modlistlogZn) {
+#   print(mod$call)
+#   regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=1)
+# }
+
 regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', labelvec = NULL,
                                     kCV = TRUE, k=10, cvreps=20) {
+  "Function to create the content of a latex formatted table comparing models including.
+  - mod (required): lm model or glm model with family(gaussian, link='log') (where formula is fully spelled out with variable names)
+  - maxpar: maximum number of parameters in lm model set
+  - remove_outliers: whether to run models without outliers (or optionally just without outliers with high leverage)
+  - labelvec: vector of IDs for each sample used for displaying which samples were removed as outliers
+  - kCV: TRUE/FALSE whether to perform multiple k-fold validation
+  - k: number of folds
+  - cvreps: # of times to repeat k-fold validation
+  "
   
   formcall <- mod$call$formula
   
   "Options for remove_outliers: none, outliers, outliers & leverage"
+  
   if (remove_outliers != 'none') {
     if (remove_outliers == 'outliers') {
-      outrows <- setDT(ols_noplot_resid_lev(mod)$plot$data)[color %in% c('outlier','outlier & leverage'), obs]
+      outrows <- setDT(ols_prep_rstudlev_data(mod)$`levrstud`)[color %in% c('outlier','outlier & leverage'), obs]
     } 
     if (remove_outliers == 'outliers & leverage') {
-      outrows <- setDT(ols_noplot_resid_lev(mod)$plot$data)[color %in% c('outlier & leverage'), obs]
+      outrows <- setDT(ols_prep_rstudlev_data(mod)$`levrstud`)[color %in% c('outlier & leverage'), obs]
     }
     datasub <- if (length(outrows) > 0) mod$model[-outrows, , drop = FALSE] else mod$model
-    mod <- lm(formula=as.formula(formcall), data=datasub)
+    
+    if (all(class(mod)=='lm')) {
+      mod <- lm(formula=as.formula(formcall), data=datasub)
+    } 
+    if (class(mod)[1] =='glm') {
+      mod <- glm(formula=as.formula(formcall), data=datasub)
+    }
     outlierlist <- if (!is.null(labelvec)) paste(labelvec[outrows], collapse='\\,') else NULL
   } else {
     outlierlist <- NULL
@@ -269,7 +291,8 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
       
       modcv <- train(form = as.formula(formcall), 
                      data = mod$model,
-                     method = "lm",
+                     method = class(mod)[1],
+                     family = if (class(mod)[1] == 'glm') gaussian(link='log') else NULL,
                      trControl = ctrl)
       
       kCVresults <- setDT(modcv$resample)[, sapply(.SD, function(x) {
@@ -297,24 +320,28 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
   
   #Prepare VIF columns
   if (length(mod$coefficients) > 2) {
-    vifcols <- c(round(ols_vif_tol(mod)$VIF), rep('', maxpar-(length(mod$coefficients)-1)))
+    vifcols <- c(round(VIF(mod)), rep('', maxpar-(length(mod$coefficients)-1)))
   } else {
     vifcols <- rep('', maxpar)
   }
   names(vifcols) <- paste0('VIF', 2:(maxpar+1))
+  
+
+  #Prepare Breusch pagan test
+  
   
   c(formula_out,
     nvars = length(unique(unlist(
       strsplit(gsub('\\s', '', names(mod$coefficients)[names(mod$coefficients)!='(Intercept)']),'[*+:]')
     ))), #Number of unique variables used (to check amount of pre-computing required)
     nsig = paste(length(sigcoefs),nrow(sumod$coefficients),sep='/'), #Proportion of significant coefficients
-    ShapiroWilkp = round(ols_test_normality(mod)$shapiro$p.value,2), #Test of normality of residuals - H0: residuals are normal
-    'BreuschPagan\\_fitp' = round(ols_test_breusch_pagan(mod)$p, 2), #Test of homoscedasticity of residuals vs. response, assumes indep and normally distributed - H0: variance is constant
-    'Score\\_fitp' = round(ols_test_score(mod)$p,2), #Test of homoscedasticity of residuals vs. fitted, assume iid - Ho: variance is homogenous
+    ShapiroWilkp = round(shapiro.test(residuals(mod))$p.value, 2),
+    'BreuschPagan\\_fitp' = if (all(class(mod)=='lm')) round(ols_test_breusch_pagan(mod)$p, 2) else NA, #Test of homoscedasticity of residuals vs. response, assumes indep and normally distributed - H0: variance is constant
+    'Score\\_fitp' = if (all(class(mod)=='lm')) round(ols_test_score(mod)$p,2) else NA, #Test of homoscedasticity of residuals vs. fitted, assume iid - Ho: variance is homogenous
     AICc = round(AICcmodavg::AICc(mod)), 
-    R2 =  round(sumod$r.squared, 2), 
-    R2adj = round(sumod$adj.r.squared, 2),
-    R2pred = round(ols_pred_rsq(mod), 2),
+    R2 =  if (all(class(mod)=='lm')) round(sumod$r.squared, 2) else NA, 
+    R2adj = if (all(class(mod)=='lm')) round(sumod$adj.r.squared, 2) else NA,
+    R2pred = if (all(class(mod)=='lm')) round(ols_pred_rsq(mod), 2) else NA,
     RMSE = round(DescTools::RMSE(mod),2), 
     MAE=round(DescTools::MAE(mod),2),
     kCVresults,
@@ -445,6 +472,8 @@ pcabiplot_grid <- function(dt, cols, idcols, nPCs=NULL, scload=1) {
 }
 
 latex_format <- function(summary_table) {
+  "Function to format a DF with embedded latex formatting into a 
+  full latex document that can directly turned into a PDF. Can adjust paperheight and paperwodth, margin, etc."
   ltable <- print(xtable(summary_table), type="latex", 
                   booktabs=TRUE, #format table
                   sanitize.text.function = identity, #Disable sanitizing to allow for latex formatting to be kept intact
@@ -588,7 +617,6 @@ tire_elem <- c('Al', 'Ba', 'Ca', 'Cd', 'Co', 'Cr', 'Cu', 'Fe', 'K', 'Mg', 'Mn', 
                'Pb', 'Sb', 'Sr', 'Ti', 'Zn')
 
 ############################################################################################################################################
-
 
 # 2. Format XRF and ICP data
 ############################################################################################################################################
@@ -2678,7 +2706,7 @@ modlistZn[[18]] <- lm(Zn ~ heatbustransitlog300 + heat_binglog300 +
                        heatOSMSPDlog100*heatOSMgradientlog200 + nlcd_imp_ps:heatOSMSPDlog100, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[18]])
-#ols_plot_diagnostics(modlistZn[[18]])
+ols_plot_diagnostics(modlistZn[[18]])
 ols_coll_diag(modlistZn[18])
 ols_correlations(modlistZn[[18]])
 
@@ -2787,9 +2815,341 @@ setorder(model_summaryZn, -R2pred, AICc)
 cat(latex_format(model_summaryZn), file = file.path(moddir, 'modeltable_Zn.tex'))
 setwd(moddir)
 texi2pdf('modeltable_Zn.tex')
+#------ 4. Transform Zn ----
+pollutfieldclean_cast[, getlambda(Zn)]
+grid.arrange(
+  ggplot(pollutfieldclean_cast, aes(x=Zn)) + 
+    geom_histogram(fill='blue', alpha=1/2),
+  ggplot(pollutfieldclean_cast, aes(x=log(Zn))) + 
+    geom_histogram(fill='red', alpha=1/2))
+
+#lambda = 0.2, almost log. 
+pollutfieldclean_cast[, logZn := log(Zn)]
+
+modlistlogZn <- list() #List to hold models
+modlistlogZn[[1]] <- lm(logZn ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
+
+#------ 5. logZn - Single parameter models --------
+modlistlogZn[[2]] <- lm(logZn ~ heatOSMAADTlog300, data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[2]])
+#ols_plot_diagnostics(modlistlogZn[[2]])
+
+modlistlogZn[[3]] <- lm(logZn ~ heat_binglog300, data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[3]])
+#ols_plot_diagnostics(modlistlogZn[[3]])
+
+modlistlogZn[[4]] <- lm(logZn ~ nlcd_imp_ps, data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[4]])
+#ols_plot_diagnostics(modlistlogZn[[4]])
+
+modlistlogZn[[5]] <- lm(logZn ~ heatbustransitlog300, data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[5]])
+#ols_plot_diagnostics(modlistlogZn[[5]])
+
+modlistlogZn[[6]] <- lm(logZn ~ heatOSMSPDlog100, data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[6]])
+#ols_plot_diagnostics(modlistlogZn[[6]])
+
+modlistlogZn[[7]] <- lm(logZn ~ heatOSMSPDlog100 + I(heatOSMSPDlog100^2), data = pollutfieldclean_cast)
+predf <- cbind(pollutfieldclean_cast, predict(modlistlogZn[[7]], interval = 'confidence'))
+ggplot(pollutfieldclean_cast, aes(x=heatOSMSPDlog100)) + 
+  geom_ribbon(data = predf, aes(ymin=lwr, ymax=upr), fill='orange') +
+  geom_point(aes(y=logZn)) +
+  geom_line(data = predf,aes(y=fit)) +
+  geom_smooth(aes(y=logZn), span=1) +
+  theme_classic()
+ols_regress(modlistlogZn[[7]])
+#ols_plot_diagnostics(modlistlogZn[[7]])
+
+modlistlogZn[[8]] <- lm(logZn ~ heatOSMgradientlog200, data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[8]])
+#ols_plot_diagnostics(modlistlogZn[[8]])
+
+#------ 6. logZn - Multiparameter models --------
+modlistlogZn[[9]] <- lm(logZn ~ heatbustransitlog300 + heat_binglog300, data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[9]])
+#ols_plot_diagnostics(modlistlogZn[[9]])
+ols_coll_diag(modlistlogZn[[9]])
+ols_correlations(modlistlogZn[[9]])
+# ols_plot_added_variable(modlistlogZn[[9]])
+# ols_plot_comp_plus_resid(modlistlogZn[[9]])
+
+modlistlogZn[[10]] <- lm(logZn ~ heatbustransitlog300 + heat_binglog300 + heatOSMSPDlog100, 
+                      data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[10]])
+ols_plot_diagnostics(modlistlogZn[[10]])
+ols_coll_diag(modlistlogZn[[10]])
+ols_correlations(modlistlogZn[[10]])
+
+modlistlogZn[[11]] <- lm(logZn ~ heatbustransitlog300 + heat_binglog300*heatOSMSPDlog100, 
+                      data = pollutfieldclean_cast)
+# subdat <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% c('23A', '34A', '33B')),]
+# modlistlogZn[[11]] <- lm(logZn ~ heatbustransitlog300 + heat_binglog300*heatOSMSPDlog100, 
+#                      data = subdat)
+summary(modlistlogZn[[11]])
+ols_plot_diagnostics(modlistlogZn[[11]])
+ols_coll_diag(modlistlogZn[[11]])
+ols_correlations(modlistlogZn[[11]])
+theme_set(theme_sjplot())
+plot_model(modlistlogZn[[11]], type='pred', terms = c('heat_binglog300', 'heatOSMSPDlog100'))
+
+modlistlogZn[[12]] <- lm(logZn ~ heatbustransitlog300 + heat_binglog300 + heatOSMSPDlog100 + I(heatOSMSPDlog100^2), 
+                         data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[12]])
+ols_plot_diagnostics(modlistlogZn[[12]])
+ols_coll_diag(modlistlogZn[[12]])
+ols_correlations(modlistlogZn[[12]])
+
+
+modlistlogZn[[13]] <- lm(logZn ~ heatbustransitlog300 + heat_binglog300*heatOSMSPDlog100 + I(heatOSMSPDlog100^2), 
+                         data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[13]])
+ols_plot_diagnostics(modlistlogZn[[13]])
+ols_coll_diag(modlistlogZn[[13]])
+ols_correlations(modlistlogZn[[13]])
+
+
+modlistlogZn[[14]] <- lm(logZn ~ heatbustransitlog300 + heat_binglog300 + 
+                        heatOSMAADTlog300, 
+                      data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[14]])
+#ols_plot_diagnostics(modlistlogZn[[12]])
+ols_coll_diag(modlistlogZn[[14]])
+ols_correlations(modlistlogZn[[14]])
+
+modlistlogZn[[15]] <- lm(logZn ~ heatbustransitlog300 + heat_binglog300*heatOSMAADTlog300, 
+                      data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[15]])
+#ols_plot_diagnostics(modlistlogZn[[13]])
+ols_coll_diag(modlistlogZn[[15]])
+ols_correlations(modlistlogZn[[15]])
+#plot_model(modlistlogZn[[13]], type='pred', terms = c('heat_binglog300', 'heatOSMAADTlog100'))
+
+modlistlogZn[[16]] <- lm(logZn ~ heatbustransitlog300 + heat_binglog300*heatOSMAADTlog300*heatOSMSPDlog100, 
+                         data = pollutfieldclean_cast)
+ols_regress(modlistlogZn[[16]])
+ols_plot_diagnostics(modlistlogZn[[16]])
+ols_coll_diag(modlistlogZn[[16]])
+ols_correlations(modlistlogZn[[16]])
+
+#------ 7. log(Zn) - Make latex model summary table ----
+vnum <- max(sapply(modlistlogZn, function(mod) {length(mod$coefficients)}))
+model_summarylogZn<- as.data.table(
+  ldply(modlistlogZn, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
+setorder(model_summarylogZn, -R2pred, AICc)  
+cat(latex_format(model_summarylogZn), file = file.path(moddir, 'modeltable_logZn.tex'))
+setwd(moddir)
+texi2pdf('modeltable_logZn.tex')
 
 
 #Could add Synthetic index ~ PC or Individual pollutants ~ PC but could just add difficulty
+#------ 8. glm(Zn, gaussian log link) - Single parameter models  --------
+modlistglmZn <- list() #List to hold models
+modlistglmZn[[1]] <- glm(Zn ~ 1, data = pollutfieldclean_cast, family=gaussian(link='log')) #Null/Intercept model
+par(mfrow=c(2,2))
+
+modlistglmZn[[2]] <- glm(Zn ~ heatOSMAADTlog300, data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[2]])
+plot(modlistglmZn[[2]])
+
+modlistglmZn[[3]] <- glm(Zn ~ heat_binglog300, data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[3]])
+plot(modlistglmZn[[3]])
+
+modlistglmZn[[4]] <- glm(Zn ~ nlcd_imp_ps, data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[4]])
+plot(modlistglmZn[[4]])
+
+modlistglmZn[[5]] <- glm(Zn ~ heatbustransitlog300, data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[5]])
+plot(modlistglmZn[[5]])
+
+modlistglmZn[[6]] <- glm(Zn ~ heatOSMSPDlog100, data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[6]])
+plot(modlistglmZn[[6]])
+
+modlistglmZn[[7]] <- glm(Zn ~ heatOSMSPDlog100 + I(heatOSMSPDlog100^2), data = pollutfieldclean_cast, family=gaussian(link='log'))
+ggplot(pollutfieldclean_cast, aes(x=heatOSMSPDlog100)) + 
+  geom_point(aes(y=Zn)) +
+  geom_line(data = predf,aes(y=fitted(modlistglmZn[[7]])), color='red', size=1.5) +
+  geom_smooth(aes(y=Zn), span=1) +
+  theme_classic()
+summary(modlistglmZn[[7]])
+plot(modlistglmZn[[7]])
+
+modlistglmZn[[8]] <- glm(Zn ~ heatOSMgradientlog200, data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[8]])
+plot(modlistglmZn[[8]])
+
+#------ 9. glm(Zn, gaussian log link)  - Multiparameter models --------
+modlistglmZn[[9]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300, data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[9]])
+plot(modlistglmZn[[9]])
+
+modlistglmZn[[10]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300 + heatOSMSPDlog100, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[10]])
+plot(modlistglmZn[[10]])
+
+modlistglmZn[[11]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300*heatOSMSPDlog100, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log', variance='identity'))
+summary(modlistglmZn[[11]])
+plot(modlistglmZn[[11]])
+theme_set(theme_sjplot())
+plot_model(modlistglmZn[[11]], type='pred', terms = c('heat_binglog300', 'heatOSMSPDlog100'))
+
+
+modlistglmZn[[12]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300 + 
+                           heatOSMAADTlog300, 
+                         data = pollutfieldclean_cast, family=gaussian(link = "log"))
+summary(modlistglmZn[[12]])
+plot(modlistglmZn[[12]])
+
+modlistglmZn[[13]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300*heatOSMAADTlog300, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[13]])
+plot(modlistglmZn[[13]])
+
+modlistglmZn[[14]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300*heatOSMSPDlog100 + 
+                           heatOSMAADTlog300, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[14]])
+plot(modlistglmZn[[14]])
+
+
+modlistglmZn[[15]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300*heatOSMgradientlog200 + 
+                           heatOSMSPDlog100, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[15]])
+plot(modlistglmZn[[15]])
+
+
+modlistglmZn[[16]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300 + 
+                           heatOSMSPDlog100*heatOSMgradientlog200, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[16]])
+plot(modlistglmZn[[16]])
+
+
+modlistglmZn[[17]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300 + 
+                           heatOSMSPDlog100*heatOSMgradientlog200 + nlcd_imp_ps, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[17]])
+plot(modlistglmZn[[17]])
+
+modlistglmZn[[18]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300 + 
+                           heatOSMSPDlog100*heatOSMgradientlog200 + nlcd_imp_ps:heatOSMSPDlog100, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[18]])
+plot(modlistglmZn[[18]])
+
+
+modlistglmZn[[19]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300*nlcd_imp_ps + 
+                           heatOSMSPDlog100*heatOSMgradientlog200, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[19]])
+plot(modlistglmZn[[19]])
+
+
+modlistglmZn[[20]] <- glm(Zn ~ heatbustransitlog300 + heat_binglog300 + 
+                           heatOSMSPDlog100 + nlcd_imp_ps, 
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[20]])
+plot(modlistglmZn[[20]])
+
+
+#Build models without bus transit
+modlistglmZn[[21]] <- glm(Zn ~ heatOSMAADTlog300 + heat_binglog300 + heatOSMSPDlog100,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[21]])
+plot(modlistglmZn[[21]])
+
+
+modlistglmZn[[22]] <- glm(Zn ~ heatOSMAADTlog300*heat_binglog300,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[22]])
+plot(modlistglmZn[[22]])
+
+
+modlistglmZn[[23]] <- glm(Zn ~ heatOSMSPDlog100*heat_binglog300,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[23]])
+plot(modlistglmZn[[23]])
+
+
+modlistglmZn[[24]] <- glm(Zn ~ heatOSMAADTlog300*heat_binglog300 + heatOSMSPDlog100,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[24]])
+plot(modlistglmZn[[24]])
+
+
+modlistglmZn[[25]] <- glm(Zn ~ heatOSMAADTlog300*heat_binglog300*heatOSMSPDlog100,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[25]])
+plot(modlistglmZn[[25]])
+
+modlistglmZn[[26]] <- glm(Zn ~ heatOSMAADTlog300 + heat_binglog300*heatOSMgradientlog200,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[26]])
+plot(modlistglmZn[[26]])
+
+modlistglmZn[[27]] <- glm(Zn ~ heatOSMAADTlog300 + heat_binglog300 + nlcd_imp_ps,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[27]])
+plot(modlistglmZn[[27]])
+
+
+#Build models without congestion
+modlistglmZn[[28]] <- glm(Zn ~  heatbustransitlog300 + heatOSMAADTlog300,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[28]])
+plot(modlistglmZn[[28]])
+
+
+modlistglmZn[[29]] <- glm(Zn ~  heatbustransitlog300 + heatOSMSPDlog100,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[29]])
+plot(modlistglmZn[[29]])
+
+
+modlistglmZn[[30]] <- glm(Zn ~  heatbustransitlog300 + heatOSMSPDlog100*heatOSMgradientlog200,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[30]])
+plot(modlistglmZn[[30]])
+
+
+modlistglmZn[[31]] <- glm(Zn ~  heatbustransitlog300 + heatOSMSPDlog100*heatOSMgradientlog200 +
+                           nlcd_imp_ps,
+                         data = pollutfieldclean_cast, family=gaussian(link='log'))
+summary(modlistglmZn[[31]])
+plot(modlistglmZn[[31]])
+
+
+#------ 10. glm(Zn, gaussian log link)  - Make latex model summary table ----
+vnum <- max(sapply(modlistglmZn, function(mod) {length(mod$coefficients)}))
+model_summaryglmZn<- as.data.table(
+  ldply(modlistglmZn, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
+model_summaryglmZn <- model_summaryglmZn[order(as.numeric(AICc), as.numeric(MAE)),]
+cat(latex_format(model_summaryglmZn), file = file.path(moddir, 'modeltable_glmZn.tex'))
+setwd(moddir)
+texi2pdf('modeltable_glmZn.tex')
+
+#------ 10. glm(Zn, gaussian log link)  - Make latex model summary table when excluding outliers----
+model_summaryglmZn_nooutliers <- as.data.table(
+  ldply(modlistglmZn, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50,
+                                                             remove_outliers = 'outliers',
+                                                             labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)])}))
+
+model_summaryglmZn_nooutliers <- model_summaryglmZn_nooutliers[order(as.numeric(AICc), as.numeric(MAE)),]
+cat(latex_format(model_summaryglmZn_nooutliers), file = file.path(moddir, 'modeltable_glmZn_nooutliers.tex'))
+setwd(moddir)
+texi2pdf('modeltable_glmZn_nooutliers.tex')
+
+#Could add Synthetic index ~ PC or Individual pollutants ~ PC but could just add difficulty
+
+
+
+
 ####################################### JUNK #############################################################
 
 
