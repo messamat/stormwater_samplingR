@@ -5,16 +5,11 @@
 
 ############################################################################################################################################
 #Planning Notes/To do:
-# re-read Zuur
-# Think about using a percentile for synthetic pollution index to be less dependent on a single value
+# think how to deal with spatial autocollinearity? (spatial autoregressive error model)
 # Test influence of method on residuals from relationships
-# Report regressions based on all data minus obvious outliers but remove outliers for spatial predictions
-# think how to deal with spatial autocollinearity? (2_d smoother of coordinates?)
-# Think of how to deal with spatial dependence: kriging or k-fold regression
-# Might use bootstrapping and k-fold validation
-# Could also use a model averaging approach
 # examine impact of method
 # add spd limit 200 and 300 + gradient 300
+# Think about using a percentile for synthetic pollution index to be less dependent on a single value
 
 #Get places with air pollution monitoring or water pollution monitoring. Model for these areas
 #Automatize workflow to be able to plug in shapefile and model for these polygons or in the basin of those areas
@@ -2171,11 +2166,11 @@ loadings(pollutpca)
 
 # 5. Model selection
 ############################################################################################################################################
-#---- A. Synthetic index ~ separate predictors ----
+#--------------- A. Synthetic index ~ separate predictors ----
 modlistA <- list() #List to hold models
 modlistA[[1]] <- lm(pollution_index ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
 
-#-------- 1. Single parameter models --------
+#------ 1. Single parameter models --------
 modlistA[[2]] <- lm(pollution_index ~ heatOSMAADTlog300, data = pollutfieldclean_cast)
 ols_regress(modlistA[[2]])
 #ols_plot_diagnostics(modlistA[[2]])
@@ -2211,7 +2206,7 @@ modlistA[[8]] <- lm(pollution_index ~ heatOSMgradientlog200, data = pollutfieldc
 ols_regress(modlistA[[8]])
 #ols_plot_diagnostics(modlistA[[8]])
 
-#-------- 2. Multiparameter models --------
+#------ 2. Multiparameter models --------
 modlistA[[9]] <- lm(pollution_index ~ heatbustransitlog300 + heat_binglog300, data = pollutfieldclean_cast)
 ols_regress(modlistA[[9]])
 #ols_plot_diagnostics(modlistA[[9]])
@@ -2392,7 +2387,7 @@ ols_regress(modlistA[[31]])
 ols_coll_diag(modlistA[[31]])
 ols_correlations(modlistA[[31]])
 
-#-------- 4. Make latex model summary table ----
+#------ 4. Make latex model summary table ----
 vnum <- max(sapply(modlistA, function(mod) {length(mod$coefficients)}))
 model_summary<- as.data.table(
   ldply(modlistA, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
@@ -2401,7 +2396,7 @@ cat(latex_format(model_summary), file = file.path(moddir, 'pollutionindex_modelt
 setwd(moddir)
 texi2pdf('pollutionindex_modeltable.tex')
 
-#-------- 5. Make latex model summary table when excluding outliers ----
+#------ 5. Make latex model summary table when excluding outliers ----
 model_summary_nooutliers <- as.data.table(
   ldply(modlistA, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, 
                                                          remove_outliers = 'outliers',
@@ -2412,12 +2407,14 @@ cat(latex_format(model_summary_nooutliers), file = file.path(moddir, 'pollutioni
 setwd(moddir)
 texi2pdf('pollutionindex_modeltable_nooutliers.tex')
 
-#-------- 6. Compare final selected models ----
+#------ 6. Compare final selected models ----
 #Compare model 11 to model 10 for equal removal of outliers
 mod10_nooutliers <- regdiagnostic_customtab(modlistA[[10]], maxpar=vnum, 
                                             remove_outliers = 'outliers',
                                             labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)],
                                             kCV = TRUE, k=10, cvreps=50)
+subdat <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
+                                    strsplit(gsub('\\\\', '', mod10_nooutliers['outliers']), ',')$outliers),]
 mod10_nooutliersub <- lm(pollution_index ~ heatbustransitlog300 + heat_binglog300 + heatOSMSPDlog100, 
                           data = subdat)
 ols_regress(mod10_nooutlierssub)
@@ -2448,12 +2445,15 @@ qplot(subdat$heat_binglog300, mod11_nooutliersub$residuals) +
 qplot(subdat$heatOSMSPDlog100, mod11_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
-#For the sake of parsimony, would go for model #10
+#For the sake of parsimony, go for model #10
 
-
-
-
-#-------- 7. Check spatial and temporal autocorrelation of residuals
+#------ 7. Check spatial and temporal autocorrelation of residuals for full and 'robust' datasets -------
+"Fron Anselin 2006: ignoring spatially correlated errors is mostly a problem of efficiency, in the
+sense that the OLS coefficient standard error estimates are biased, but the
+coefficient estimates themselves remain unbiased. However, to the extent that
+the spatially correlated errors mask an omitted variable, the consequences of
+ignoring this may be more serious."
+#---- For model 10 with all data: pollution_index ~ heatbustransitlog300 + heat_binglog300 + heatOSMSPDlog100 -----
 resnorm <- rstandard(modlistA[[10]]) #Get standardized residuals from model
 #Make bubble map of residuals
 bubbledat <- data.frame(resnorm, pollutfieldclean_cast$coords.x1, pollutfieldclean_cast$coords.x2)
@@ -2462,37 +2462,108 @@ bubble(bubbledat, "resnorm", col = c("blue","red"),
        main = "Residuals", xlab = "X-coordinates",
        ylab = "Y-coordinates")
 #Check semi-variogram of residuals
-Vario1 <- variogram(resnorm~1, bubbledat, cutoff=2000, width=200)
-plot(Vario1) #isotropic
-plot(variogram(resnorm~1, bubbledat, cutoff= 2000, width=100, alpha = c(0, 45, 90,135))) #anisotropic
-
+plot(variogram(resnorm~1, bubbledat, cutoff=2000, width=50)) #isotropic
+plot(variogram(resnorm~1, bubbledat, cutoff= 2000, width=50, alpha = c(0, 45, 90,135))) #anisotropic
 #Check spline correlogram ()
 plot(spline.correlog(x=coordinates(bubbledat)[,1], y=coordinates(bubbledat)[,2],
                      z=bubbledat$resnorm, resamp=500, quiet=TRUE, xmax = 5000))
+#Compute a spatial weight matrix based on IDW
+weightmat_k <- lapply(1:10, function(i) {
+  weightmat_IDW(pollutfieldclean_cast[, .(coords.x1, coords.x2)], knb = i, mindist = 10)}) #Based on 10 nearest neighbors
+weightmat_all <- weightmat_IDW(pollutfieldclean_cast[, .(coords.x1, coords.x2)], knb = NULL, mindist = 10) #Based on all points
 
-#Compute a spatial weight matrix based on IDW of 10 nearest neighbors 
-weightmat_k3 <- weightmat_IDW(pollutfieldclean_cast[, .(coords.x1, coords.x2)], knb = 3, mindist = 10)
-weightmat_all <- weightmat_IDW(pollutfieldclean_cast[, .(coords.x1, coords.x2)], knb = NULL, mindist = 10)
-
-#Create spatially lagged residuals and Moran plot
-lag_resnorm <- lag.listw(weightmat_all, resnorm)
-moran.plot(resnorm, weightmat_all, 
-           labels=pollutfieldclean_cast[,paste0(SiteID, Pair)], pch=19)
+#Moran plots
+#lag_resnorm <- lag.listw(weightmat_all, resnorm) #Can be used to create customized Moran plot by plotting residuals against matrix
+moran.plot(resnorm, weightmat_all, labels=pollutfieldclean_cast[,paste0(SiteID, Pair)], pch=19)
+moran.plot(resnorm, weightmat_k[[2]], labels=pollutfieldclean_cast[,paste0(SiteID, Pair)], pch=19)
 
 #Compute Moran's I
 "Should always only use lm.morantest for residuals from regression, see http://r-sig-geo.2731867.n2.nabble.com/Differences-between-moran-test-and-lm-morantest-td7591336.html
 for an explanation"
-lm.morantest(modlistA[[10]], listw2U(weightmat_k3)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistA[[10]], listw = listw2U(weightmat_k[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistA[[10]], listw = listw2U(weightmat_all)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+
+#Test for need for spatial regression model using Lagrange Multiplier (LM) tests
+lm.LMtests(modlistA[[10]], listw = listw2U(weightmat_k[[2]]), test=c("LMerr","RLMerr", "SARMA"))
+
+#Spatial simultaneous autoregressive error model estimation with 2 nearest neighbors
+sarlm_mod10 <- errorsarlm(modlistA[[10]]$call$formula, data = modlistA[[10]]$model, 
+                          listw = listw2U(weightmat_k[[2]]))
+summary(sarlm_mod10)
+#Compare AIC
+AIC(sarlm_mod10)
+AIC(modlistA[[10]])
+#Compare pseudo-R2
+cor(modlistA[[10]]$model$pollution_index, fitted(sarlm_mod10))^2
+cor(modlistA[[10]]$model$pollution_index, fitted(modlistA[[10]]))^2
+
+#---- For model 10 without outliers: pollution_index ~ heatbustransitlog300 + heat_binglog300 + heatOSMSPDlog100 -----
+resnorm_sub <- rstandard(mod10_nooutliersub) #Get standardized residuals from model
+resnorm_subdf <- data.frame(resnorm_sub, subdat$coords.x1, subdat$coords.x2)
+coordinates(resnorm_subdf) <- c("subdat.coords.x1","subdat.coords.x2")
+
+#Check semi-variogram of residuals
+plot(variogram(resnorm_sub~1, resnorm_subdf, cutoff=1000, width=50)) #isotropic
+plot(variogram(resnorm_sub~1, resnorm_subdf, cutoff= 1000, width=50, alpha = c(0, 45, 90,135))) #anisotropic
+#Check spline correlogram ()
+plot(spline.correlog(x=coordinates(resnorm_subdf)[,1], y=coordinates(resnorm_subdf)[,2],
+                     z=resnorm_subdf$resnorm_sub, resamp=500, quiet=TRUE, xmax = 5000))
+#Compute a spatial weight matrix based on IDW
+weightmat_ksub <- lapply(1:10, function(i) {
+  weightmat_IDW(subdat[, .(coords.x1, coords.x2)], knb = i, mindist = 10)}) #Based on 10 nearest neighbors
+weightmat_allsub <- weightmat_IDW(subdat[, .(coords.x1, coords.x2)], knb = NULL, mindist = 10) #Based on all points
+
+#Moran plots
+#lag_resnorm_sub <- lag.listw(weightmat_all, resnorm_sub) #Can be used to create customized Moran plot by plotting residuals against matrix
+moran.plot(resnorm_sub, weightmat_allsub, labels=subdat[,paste0(SiteID, Pair)], pch=19)
+moran.plot(resnorm_sub, weightmat_ksub[[1]], labels=subdat[,paste0(SiteID, Pair)], pch=19)
+
+#Compute Moran's I
+"Should always only use lm.morantest for residuals from regression, see http://r-sig-geo.2731867.n2.nabble.com/Differences-between-moran-test-and-lm-morantest-td7591336.html
+for an explanation"
+lm.morantest(mod10_nooutliersub, listw = listw2U(weightmat_ksub[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod10_nooutliersub, listw = listw2U(weightmat_allsub)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+
+#Test for need for spatial regression model using Lagrange Multiplier (LM) tests
+lm.LMtests(mod10_nooutliersub, listw = listw2U(weightmat_ksub[[2]]), test=c("LMerr","RLMerr", "SARMA"))
+
+#Spatial simultaneous autoregressive error model estimation with 2 nearest neighbors
+sarlm_mod10sub <- errorsarlm(mod10_nooutliersub$call$formula, data = mod10_nooutliersub$model, 
+                          listw = listw2U(weightmat_ksub[[2]]))
+summary(sarlm_mod10sub)
+#Compare AIC
+AIC(sarlm_mod10sub)
+AIC(mod10_nooutliersub)
+#Compare pseudo-R2
+cor(mod10_nooutliersub$model$pollution_index, fitted(sarlm_mod10sub))^2
+cor(mod10_nooutliersub$model$pollution_index, fitted(mod10_nooutliersub))^2
+#Compare observed~predicted for full-no outlier model and for aspatial and spatial model
+fullsub_comparisonplot <- ggplot(subdat, aes(x=fitted(sarlm_mod10sub), y=pollution_index)) + 
+  geom_point(data=modlistA[[10]]$model, aes(x=fitted(modlistA[[10]])), size=2, color='black') +
+  geom_point(aes(x=predict(modlistA[[10]], subdat)), size=2, color='grey') +
+  geom_point(aes(x=fitted(mod10_nooutliersub)), size=2, alpha=1/2, color='orange') +
+  geom_abline(size=1, slope=1, intercept=0, color='red') + 
+  coord_fixed() +
+  theme_classic()
+
+spatial_comparisonplot <- ggplot(subdat, aes(x=fitted(sarlm_mod10sub), y=pollution_index)) + 
+  geom_point(aes(x=fitted(mod10_nooutliersub)), size=2, alpha=1/2, color='orange') +
+  geom_point(size=2, alpha=1/2, color='red') + 
+  geom_abline(size=1, slope=1, intercept=0, color='red') + 
+  coord_fixed() +
+  theme_classic()
+
+grid.arrange(fullsub_comparisonplot, spatial_comparisonplot)
 
 
-#Possible ways to deal with autocorrelation
-# LME with Geospatial matrix (nlme)
 
 
-#---- B. Synthetic index ~ PC ----
-#---- C. Individual pollutants ~ separate predictors ----
-#---- C. Individual pollutants ~ PC ----
 
+
+#--------------- C. Individual pollutants ~ separate predictors ----
+#--------------- D. Individual pollutants ~ PC ----
+
+#Could add Synthetic index ~ PC or Individual pollutants ~ PC but could just add difficulty
 ####################################### JUNK #############################################################
 
 
