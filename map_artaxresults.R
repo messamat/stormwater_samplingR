@@ -63,6 +63,9 @@ library(AICcmodavg)
 library(DescTools)
 library(sjPlot)
 library(caret)
+library(gstat)
+library(spdep)
+library(ncf)
 
 source_url("https://raw.githubusercontent.com/messamat/biostats_McGarigal/master/biostats.R")
 data(periodicTable)
@@ -247,6 +250,9 @@ ols_noplot_resid_lev <- function(mod){
 #mod <- modlistA[[10]]
 regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', labelvec = NULL,
                                     kCV = TRUE, k=10, cvreps=20) {
+  
+  formcall <- mod$call$formula
+  
   "Options for remove_outliers: none, outliers, outliers & leverage"
   if (remove_outliers != 'none') {
     if (remove_outliers == 'outliers') {
@@ -256,7 +262,7 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
       outrows <- setDT(ols_noplot_resid_lev(mod)$plot$data)[color %in% c('outlier & leverage'), obs]
     }
     datasub <- if (length(outrows) > 0) mod$model[-outrows, , drop = FALSE] else mod$model
-    mod <- lm(formula=as.formula(mod$call$formula), data=datasub)
+    mod <- lm(formula=as.formula(formcall), data=datasub)
     outlierlist <- if (!is.null(labelvec)) paste(labelvec[outrows], collapse='\\,') else NULL
   } else {
     outlierlist <- NULL
@@ -268,7 +274,7 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
                            number = k,
                            repeats = cvreps)
       
-      modcv <- train(form = as.formula(mod$call$formula), 
+      modcv <- train(form = as.formula(formcall), 
                      data = mod$model,
                      method = "lm",
                      trControl = ctrl)
@@ -466,6 +472,29 @@ latex_format <- function(summary_table) {
   return(ltable_edit)
 }
 
+weightmat_IDW <- function(coords, knb, mindist = 10) {
+  "Function to build an inverse distance weight matrix, if knb is NULL returns an IDW matrix
+  of all points; if knb is defined e.g. 10, returns an IDW matrix of knb neighbors.
+  - coords must be a data.frame, data.table, or other two-column set of coordinates
+  - mindist is a constant added to the distance matrix for distinct but overlapping points"
+  
+  spp <- SpatialPoints(coords)
+  "See session 1 of Intro to mapping and spatial modelling in R by Richard Harris, creator of package spdep"
+  distall_inv <- 1/(mindist+as.matrix(dist(coords)))^0.5 #Make inverse distance weight matrix
+  diag(distall_inv) <- 0
+  outmat <- mat2listw(distall_inv)
+  
+  if (!is.null(knb)) {
+    knear <- knearneigh(spp, k=knb, RANN=F) #Find 10 nearest neighbors for each point
+    dweights <- lapply(1:knear$np, function(i) { #For each point, only keep IDW of 10 nearest neighbors
+      distall_inv[i, knear$nn[i,]]
+    })
+    knear_nb <- knn2nb(knear) #Convert kkn object to a neighbours list of class nb
+    #plot(knear_nb, coords)
+    outmat <- nb2listw(knear_nb, glist = dweights, style='C') #Create spatial weights matrix (globally standardized i.e. not by neighborhood)
+  }
+  return(outmat)
+}
 ###########################################################################################################################################
 
 # 1. Import data 
@@ -2038,6 +2067,11 @@ pca <- PcaClassic(~., data=pollutfieldclean_cast[,elemcols_sub,with=F], scale=TR
 summary(pca)
 screeplot(pca, main="Screeplot: classic PCA", bstick=TRUE) #First PC significant compared to broken stick
 ordi.monte(pollutfieldclean_cast[,elemcols_sub,with=F],ord='pca',dim=5) #2PCs significant with Monte-carlo test of component significance
+#Plot
+#Plot
+#Plot
+#Plot
+#Plot
 biplot(pca, main="Robust biplot", col=c("gray55", "red"))  
 plot(pca)
 
@@ -2302,7 +2336,7 @@ ols_correlations(modlistA[[23]])
 modlistA[[24]] <- lm(pollution_index ~ heatOSMAADTlog300*heat_binglog300 + heatOSMSPDlog100,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[24]])
-ols_plot_diagnostics(modlistA[[24]])
+#ols_plot_diagnostics(modlistA[[24]])
 ols_coll_diag(modlistA[[24]])
 ols_correlations(modlistA[[24]])
 
@@ -2367,31 +2401,101 @@ cat(latex_format(model_summary), file = file.path(moddir, 'pollutionindex_modelt
 setwd(moddir)
 texi2pdf('pollutionindex_modeltable.tex')
 
-#-------- 4. Make latex model summary table when excluding outliers ----
-############ TROUBLESHOOT THAT ########
+#-------- 5. Make latex model summary table when excluding outliers ----
 model_summary_nooutliers <- as.data.table(
   ldply(modlistA, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, 
                                                          remove_outliers = 'outliers',
-                                                         labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)])}))
+                                                         labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)],
+                                                         kCV = TRUE, k=10, cvreps=50)}))
 setorder(model_summary_nooutliers, -R2pred, AICc)  
 cat(latex_format(model_summary_nooutliers), file = file.path(moddir, 'pollutionindex_modeltable_nooutliers.tex'))
 setwd(moddir)
 texi2pdf('pollutionindex_modeltable_nooutliers.tex')
 
+#-------- 6. Compare final selected models ----
+#Compare model 11 to model 10 for equal removal of outliers
+mod10_nooutliers <- regdiagnostic_customtab(modlistA[[10]], maxpar=vnum, 
+                                            remove_outliers = 'outliers',
+                                            labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)],
+                                            kCV = TRUE, k=10, cvreps=50)
+mod10_nooutliersub <- lm(pollution_index ~ heatbustransitlog300 + heat_binglog300 + heatOSMSPDlog100, 
+                          data = subdat)
+ols_regress(mod10_nooutlierssub)
+ols_plot_diagnostics(mod10_nooutlierssub)
+ols_coll_diag(mod10_nooutlierssub)
+ols_correlations(mod10_nooutlierssub)
+AICc(mod10_nooutlierssub)
+qplot(subdat$heatbustransitlog300, mod10_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+qplot(subdat$heat_binglog300, mod10_nooutliersub$residuals) +
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+qplot(subdat$heatOSMSPDlog100, mod10_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
-#TO DO: 
-#check for error autocorrelation + influence of method on residuals
-#Select candidate model, check residual vs regressor, added variable plots, 
+subdat <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
+                                  strsplit(gsub('\\\\', '', mod10_nooutliers['outliers']), ',')$outliers),]
+mod11_nooutliersub <- lm(pollution_index ~ heatbustransitlog300 + heat_binglog300*heatOSMSPDlog100, 
+                          data = subdat)
+ols_regress(mod11_nooutlierssub)
+ols_plot_diagnostics(mod11_nooutlierssub)
+ols_coll_diag(mod11_nooutlierssub)
+ols_correlations(mod11_nooutlierssub)
+AICc(mod11_nooutlierssub)
+qplot(subdat$heatbustransitlog300, mod11_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+qplot(subdat$heat_binglog300, mod11_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+qplot(subdat$heatOSMSPDlog100, mod11_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+
+#For the sake of parsimony, would go for model #10
+
+
+
+
+#-------- 7. Check spatial and temporal autocorrelation of residuals
+resnorm <- rstandard(modlistA[[10]]) #Get standardized residuals from model
+#Make bubble map of residuals
+bubbledat <- data.frame(resnorm, pollutfieldclean_cast$coords.x1, pollutfieldclean_cast$coords.x2)
+coordinates(bubbledat) <- c("pollutfieldclean_cast.coords.x1","pollutfieldclean_cast.coords.x2")
+bubble(bubbledat, "resnorm", col = c("blue","red"),
+       main = "Residuals", xlab = "X-coordinates",
+       ylab = "Y-coordinates")
+#Check semi-variogram of residuals
+Vario1 <- variogram(resnorm~1, bubbledat, cutoff=2000, width=200)
+plot(Vario1) #isotropic
+plot(variogram(resnorm~1, bubbledat, cutoff= 2000, width=100, alpha = c(0, 45, 90,135))) #anisotropic
+
+#Check spline correlogram ()
+plot(spline.correlog(x=coordinates(bubbledat)[,1], y=coordinates(bubbledat)[,2],
+                     z=bubbledat$resnorm, resamp=500, quiet=TRUE, xmax = 5000))
+
+#Compute a spatial weight matrix based on IDW of 10 nearest neighbors 
+weightmat_k3 <- weightmat_IDW(pollutfieldclean_cast[, .(coords.x1, coords.x2)], knb = 3, mindist = 10)
+weightmat_all <- weightmat_IDW(pollutfieldclean_cast[, .(coords.x1, coords.x2)], knb = NULL, mindist = 10)
+
+#Create spatially lagged residuals and Moran plot
+lag_resnorm <- lag.listw(weightmat_all, resnorm)
+moran.plot(resnorm, weightmat_all, 
+           labels=pollutfieldclean_cast[,paste0(SiteID, Pair)], pch=19)
+
+#Compute Moran's I
+"Should always only use lm.morantest for residuals from regression, see http://r-sig-geo.2731867.n2.nabble.com/Differences-between-moran-test-and-lm-morantest-td7591336.html
+for an explanation"
+lm.morantest(modlistA[[10]], listw2U(weightmat_k3)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+
+
+#Possible ways to deal with autocorrelation
+# LME with Geospatial matrix (nlme)
+
 
 #---- B. Synthetic index ~ PC ----
 #---- C. Individual pollutants ~ separate predictors ----
 #---- C. Individual pollutants ~ PC ----
 
+####################################### JUNK #############################################################
 
-############################################################################################################################################
 
-
-#--------------------------------------------------------------------------------------
 # Output overall variability table 
 elemvar <- data.frame(Elem=colnames(fieldXRFcastnorm[,-1]),
                       mean=colMeans(fieldXRFcastnorm[,-1]),
