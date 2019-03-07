@@ -66,8 +66,13 @@ png(file.path(resdir, 'airdata', 'Znmodel_scatterplot.png'), width=6, height=6, 
 AQIZn_pred
 dev.off()
 
-SpatialPointsDataFrame(AQIZn, coordinates(AQIZn$Latitude, ))
-writeOGR()
+AQIZn[`Parameter Name`=='Zinc PM2.5 LC' & totalcount>=350, 
+      SAPE := 100*(sefit$fit-mean15_18)/((sefit$fit+mean15_18)/2)]
+writeOGR(SpatialPointsDataFrame(coords=coordinates(AQIZn[,.( Longitude, Latitude)]),
+                                data= AQIZn, proj4string=CRS('+init=epsg:4326')),
+         dsn = file.path(resdir, 'airdata'),
+         layer = 'predAQIZn',
+         driver = 'ESRI Shapefile')
 
 
 
