@@ -4,18 +4,6 @@
 #Purpose: import, format, merge, and inspect data for pollution modelling project
 
 ############################################################################################################################################
-#Planning Notes/To do:
-# Test influence of method on residuals from relationships
-# Think about using a percentile for synthetic pollution index to be less dependent on a single value
-# Get places with air pollution monitoring or water pollution monitoring. Model for these areas
-# Automatize workflow to be able to plug in shapefile and model for these polygons or in the basin of those areas
-# Get nationwide AADT and speed limit averages for roads
-# Create best model for each variable combination
-# Start downloading for Cheasepeake Bay
-# Parallelize API download to go much faster so that we can run multiple areas at once?
-# Make spider plots of how different elements correlate with different predictors, picking the 'best' predictor in each category
-
-############################################################################################################################################
 #---- Import libraries ----
 #options(warn=-1)
 library(rprojroot)
@@ -3277,7 +3265,7 @@ ols_correlations(modlistlogZn[[11]])
 modlistlogZn[[12]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + heatSPDlog300 + I(heatSPDlog300^2), 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[12]])
-#ols_plot_diagnostics(modlistlogZn[[12]])
+ols_plot_diagnostics(modlistlogZn[[12]])
 ols_coll_diag(modlistlogZn[[12]])
 ols_correlations(modlistlogZn[[12]])
 
@@ -3476,7 +3464,7 @@ ols_regress(modlistlogZn[[27]])
 ols_coll_diag(modlistlogZn[[27]])
 ols_correlations(modlistlogZn[[27]])
 
-#Without bus transit
+#############Without bus transit
 modlistlogZn[[39]] <- lm(logZn ~ heatbing1902log300 + heatSPDlog300,
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[39]])
@@ -3786,54 +3774,154 @@ mod31_nooutliers <- regdiagnostic_customtab(modlistlogZn[[31]], maxpar=vnum,
                                             remove_outliers = 'outliers',
                                             labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)],
                                             kCV = TRUE, k=10, cvreps=50)
-subdat <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
+subdat31 <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
                                     strsplit(gsub('\\\\', '', mod31_nooutliers['outliers']), ',')$outliers),]
 mod31_nooutliersub <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300 * heatOSMAADTlog100, 
-                         data = subdat)
+                         data = subdat31)
 ols_regress(mod31_nooutliersub)
 ols_plot_diagnostics(mod31_nooutliersub)
 ols_coll_diag(mod31_nooutliersub)
 ols_correlations(mod31_nooutliersub)
 AICc(mod31_nooutliersub)
-qplot(subdat$heatbustransitlog300, mod31_nooutliersub$residuals) + 
+qplot(subdat31$heatbustransitlog300, mod31_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$heatSPDlog300, mod31_nooutliersub$residuals) +
+qplot(subdat31$heatSPDlog300, mod31_nooutliersub$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$heatOSMAADTlog300, mod31_nooutliersub$residuals) + 
+qplot(subdat31$heatOSMAADTlog300, mod31_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+qplot(subdat31$heatbing1902log300, mod31_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
-
-mod37_nooutliers <- regdiagnostic_customtab(modlistlogZn[[37]], maxpar=vnum, 
+mod12_nooutliers <- regdiagnostic_customtab(modlistlogZn[[12]], maxpar=vnum, 
                                             remove_outliers = 'outliers',
                                             labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)],
                                             kCV = TRUE, k=10, cvreps=50)
-subdat <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
-                                    strsplit(gsub('\\\\', '', mod37_nooutliers['outliers']), ',')$outliers),]
-mod37_nooutliersub <- lm(logZn ~  heatbustransitlog300 + heatOSMAADTlog100 * 
+subdat12 <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
+                                    strsplit(gsub('\\\\', '', mod12_nooutliers['outliers']), ',')$outliers),]
+mod12_nooutliersub <- lm(logZn ~  heatbustransitlog300 + heatbing1902log300 + #heatOSMAADTlog100 * 
                            heatSPDlog300 + I(heatSPDlog300^2), 
-                         data = subdat)
-ols_regress(mod37_nooutliersub)
-ols_plot_diagnostics(mod37_nooutliersub)
-ols_coll_diag(mod37_nooutliersub)
-ols_correlations(mod37_nooutliersub)
-AICc(mod37_nooutliersub)
-qplot(subdat$heatbustransitlog300, mod37_nooutliersub$residuals) + 
+                         data = subdat12)
+ols_regress(mod12_nooutliersub)
+ols_plot_diagnostics(mod12_nooutliersub)
+ols_coll_diag(mod12_nooutliersub)
+ols_correlations(mod12_nooutliersub)
+AICc(mod12_nooutliersub)
+plot_model(mod12_nooutliersub, type='pred') 
+qplot(subdat12$heatbustransitlog300, mod12_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$heatbing1902log300, mod37_nooutliersub$residuals) + 
+qplot(subdat12$heatbing1902log300, mod12_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$nlcd_imp_ps, mod37_nooutliersub$residuals) + 
+qplot(subdat12$nlcd_imp_ps, mod12_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$heatOSMAADTlog50, mod37_nooutliersub$residuals) + 
+qplot(subdat12$heatOSMAADTlog50, mod12_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
-ggplot(pollutfieldclean_cast, aes(y=predict(mod31_nooutliersub, pollutfieldclean_cast), 
-                                  x=logZn)) +
-  geom_point(alpha=1/2, size=2) + 
-  geom_point(aes(y = predict(mod37_nooutliersub, pollutfieldclean_cast)), color='red', alpha=1/2, size=2) + 
-  geom_abline(intercept=0, slope=1) +
-  theme_classic()
+########################Go with model 12?
+#Plot of model12
+mod12pred <- as.data.frame(predict(mod12_nooutliersub, subdat12, se.fit = T, 
+                                   interval='confidence'))
+MAE(exp(mod12pred$fit), pollutfieldclean_cast$Zn)
+subdat12 <- cbind(subdat12, mod12pred)
+Znmod12plot <- ggplot(data=subdat12, aes(y=exp(mod12pred$fit), x=Zn)) +
+  geom_point(data=pollutfieldclean_cast, 
+             aes(y=exp(predict(mod12_nooutliersub, pollutfieldclean_cast)), x=Zn), 
+             alpha=0.75, size=2,  color='red') + 
+  geom_point(size=2) +
+  geom_ribbon(aes(x=Zn, ymin=exp(lwr), ymax=exp(upr)),fill='orange', alpha=1/4) +
+  geom_abline(intercept=0, slope=1, size=1.3, color='red') +
+  #geom_smooth(method='lm', se=FALSE) +
+  scale_y_continuous(limits=c(0,2.1), expand=c(0,0), breaks=seq(0,2,0.5)) +
+  scale_x_continuous(limits=c(0,2.1), expand=c(0,0), breaks=seq(0,2,0.5)) +
+  coord_fixed() +
+  #geom_text(aes(label=paste0(SiteID,Pair))) + 
+  labs(x='Predicted Zn index', y='Observed Zn index') +
+  theme_classic() + 
+  coord_flip() +
+  theme(text= element_text(size=20))
+Znmod12plot
 
-#Go with model 31
+png(file.path(moddir, 'scatterplot_Zn_mod12.png'), width=9, height=9, units='in', res=300)
+Znmod12plot
+dev.off()
+
+#Plot of model31
+mod31pred <- as.data.frame(predict(mod31_nooutliersub, pollutfieldclean_cast, interval='confidence'))
+MAE(exp(mod31pred$fit), pollutfieldclean_cast$Zn)
+Znmod31plot <- ggplot(data=pollutfieldclean_cast, aes(x=exp(mod31pred$fit),
+                                                      y=Zn)) +
+  #geom_point(subdat31, aes(y=exp(fitted(mod31_nooutliersub)), x=exp(logZn))) +
+  geom_point(alpha=0.75, size=2) + 
+  geom_ribbon(aes(ymin=exp(mod31pred$lwr), ymax=exp(mod31pred$upr)), fill='orange', alpha=1/4) +
+  #geom_point(aes(y = predict(mod37_nooutliersub, pollutfieldclean_cast)), color='red', alpha=1/2, size=2) + 
+  geom_abline(intercept=0, slope=1, size=1.3, color='red') +
+  #geom_smooth(method='lm', se=FALSE) +
+  scale_x_continuous(limits=c(0,2.1), expand=c(0,0), breaks=seq(0,2,0.5)) +
+  scale_y_continuous(limits=c(0,2.1), expand=c(0,0), breaks=seq(0,2,0.5)) +
+  coord_fixed() +
+  labs(x='Predicted Zn index', y='Observed Zn index') +
+  theme_classic() + 
+  theme(text= element_text(size=20))
+png(file.path(moddir, 'scatterplot_Zn_mod31.png'), width=9, height=9, units='in', res=300)
+Znmod31plot
+dev.off()
+
+Znmod31interactionsplot <- plot_model(mod31_nooutliersub, type = 'int', mdrt.values = 'meansd') + 
+  theme_classic() +
+  scale_x_continuous(limits=c(20,70)) +
+  labs(x='Speed limit index', y='log(Zn index)') + 
+  guides(fill=guide_legend(title="Traffic volume index"),
+         color=guide_legend(title="Traffic volume index")) +
+  theme(text=element_text(size=20))
+png(file.path(moddir, 'scatterplot_Zn_mod31interactions.png'), width=9, height=9, units='in', res=300)
+Znmod31interactionsplot
+dev.off()
+
+
+#Check model 42 and 45 without bus transit
+mod42_nooutliers <- regdiagnostic_customtab(modlistlogZn[[42]], maxpar=vnum, 
+                                            remove_outliers = 'outliers',
+                                            labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)],
+                                            kCV = TRUE, k=10, cvreps=50)
+subdat42 <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
+                                    strsplit(gsub('\\\\', '', mod42_nooutliers['outliers']), ',')$outliers),]
+mod42_nooutliersub <- lm(logZn ~  heatbing1902log300*heatSPDlog300, 
+                         data = subdat42)
+ols_regress(mod42_nooutliersub)
+ols_plot_diagnostics(mod42_nooutliersub)
+ols_coll_diag(mod42_nooutliersub)
+ols_correlations(mod42_nooutliersub)
+AICc(mod42_nooutliersub)
+qplot(subdat42$heatbustransitlog300, mod42_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+qplot(subdat42$heatbing1902log300, mod42_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+qplot(subdat42$nlcd_imp_ps, mod42_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+qplot(subdat42$heatOSMAADTlog300, mod42_nooutliersub$residuals) + 
+  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
+
+mod42pred <- as.data.frame(predict(mod42_nooutliersub, pollutfieldclean_cast, interval='confidence'))
+MAE(exp(mod42pred$fit), pollutfieldclean_cast$Zn)
+Znmod42plot <- ggplot(data=pollutfieldclean_cast, aes(x=exp(mod42pred$fit),
+                                                      y=Zn)) +
+  geom_point(alpha=1, size=1.8, color='red') + 
+  geom_point(data=subdat42, aes(x=exp(fitted(mod42_nooutliersub))), color='black', alpha=0.8,  size=2) +
+  geom_ribbon(aes(ymin=exp(mod42pred$lwr), ymax=exp(mod42pred$upr)), fill='orange', alpha=1/4) +
+  #geom_point(aes(y = predict(mod42_nooutliersub, pollutfieldclean_cast)), color='red', alpha=1/2, size=2) + 
+  geom_abline(intercept=0, slope=1, size=1.3, color='red') +
+  #geom_smooth(method='lm', se=FALSE) +
+  scale_x_continuous(limits=c(0,2.1), expand=c(0,0), breaks=seq(0,1.5,0.5)) +
+  scale_y_continuous(limits=c(0,2.1), expand=c(0,0), breaks=seq(0,1.5,0.5)) +
+  coord_fixed() +
+  labs(x='Predicted Zn index', y='Observed Zn index') +
+  theme_classic() + 
+  theme(text= element_text(size=20))
+Znmod42plot
+png(file.path(moddir, 'scatterplot_Zn_mod42.png'), width=9, height=9, units='in', res=300)
+Znmod42plot
+dev.off()
+
+
 
 #------ 13. Zn - Check spatial and temporal autocorrelation of residuals for full dataset -------
 resnorm <- rstandard(modlistlogZn[[31]]) #Get standardized residuals from model
@@ -4386,7 +4474,7 @@ ggplot(subdatCu, aes(y=predict(modlistlogCu[[23]], subdatCu), x=logCu)) +
 ############################################################################################################################################
 #--------------- A. Export models ----
 exportlist <- list(pollutmod=sarlm_mod48sub,
-                   logZnmod = sarlm_modZn,
+                   logZnmod = modlistlogZn[[31]],
                    logCumod = modlistlogCu[[23]])
 saveRDS(exportlist, file = file.path(moddir, 'fieldXRFmodels.rds'))
 
