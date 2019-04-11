@@ -110,27 +110,27 @@ SPEC[, `:=`(UID = paste0(`State Code`, `County Code`, `Site Num`),
             UIDmeth = paste0(`State Code`, `County Code`, `Site Num`, `Method Code`),
             date = as.Date(`Date Local`),
             specmea = `Arithmetic Mean`)] #rename var for sake of simplificity
-table(SPEC$`Parameter Name`)
+#table(SPEC$`Parameter Name`)
 
 temp[, `:=`(UID = paste0(`State Code`, `County Code`, `Site Num`),
             date = as.Date(`Date Local`))][
               ,tempmea := mean(`Arithmetic Mean`), by=.(UID,date)]
-table(temp$`Parameter Name`)
+#table(temp$`Parameter Name`)
 
 wind[, `:=`(UID = paste0(`State Code`, `County Code`, `Site Num`),
             date = as.Date(`Date Local`),
             windmea = `Arithmetic Mean`)] 
-table(wind$`Parameter Name`)
+#table(wind$`Parameter Name`)
 
 rh[, `:=`(UID = paste0(`State Code`, `County Code`, `Site Num`),
             date = as.Date(`Date Local`),
             rhmea = `Arithmetic Mean`)] 
-table(rh$`Parameter Name`)
+#table(rh$`Parameter Name`)
 
 press[, `:=`(UID = paste0(`State Code`, `County Code`, `Site Num`),
             date = as.Date(`Date Local`),
             pressmea = `Arithmetic Mean`)] 
-table(press$`Parameter Name`)
+#table(press$`Parameter Name`)
 
 #Inspect data
 summary(SPEC)
@@ -150,10 +150,10 @@ ggplot(AQIZn, aes(methmean, methdiff)) +
          scale_y_sqrt() +
          scale_x_sqrt()
 
-
-########################
+###############################################################################################
 # Try fitting a model for one station
-########################
+###############################################################################################
+#------------- Format data -------------####
 Znattri <- merge(AQIZn, rh[`Parameter Name`=='Relative Humidity ', .(UID, date, rhmea)], 
                  on=c('UID', 'date'), all.x=T, all.y=T) %>%
   merge(wind[`Parameter Name`=='Wind Speed - Resultant', .(UID, date, windmea)], 
@@ -170,6 +170,24 @@ teststation <- Znattri[UID == 533330,]%>%
 meacols <- c("specmea", "tempmea", "windmea", "rhmea")
 teststation[, (meacols) := lapply(.SD, scale), .SDcols=meacols]
 
+#Assess % of missing data  
+teststation[, lapply(.SD, function(x) round(100*sum(is.na(x))/.N, 2)), .SDcols=meacols]
+
+#------------- Check weekly trend -------------####
+weekday_levels = c('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday')
+teststation[, `:=`(weekday = factor(weekdays(date),levels= weekday_levels),
+                   week = week(date))][
+                     , week_standardized := (specmea-mean(specmea, na.rm=T))/mean(specmea, na.rm=T), by=week][
+                       , weekday_mean := mean(week_standardized, na.rm=T), by=weekday]
+
+
+ggplot(teststation, aes(x=weekday, y=week_standardized)) +
+  geom_hline(yintercept=0, color='grey', size=1.3) +
+  geom_point(alpha=1/2) +
+  geom_line(aes(y=weekday_mean, group=1), color='red') +
+  theme_classic()
+
+#------------- Plot data -------------####
 ggplot(teststation, aes(x=date, y=specmea, group=UID)) +
   #geom_point() +
   geom_line(aes(y=tempmea), color='red') +
@@ -191,24 +209,21 @@ ggplot(teststation, aes(x=tempmea, y=specmea)) +
 ggplot(teststation, aes(x=windmea, y=specmea)) +
   geom_point()
 
-#Assess % of missing data
-teststation[, lapply(.SD, function(x) round(100*sum(is.na(x))/.N, 2)), .SDcols=meacols]
-
-#Make union of time series
-tsspec1 <- teststation[min(which(!is.na(specmea))):.N,ts(specmea, frequency=1, start=min(as.Date(date)))]
-tsspec <- teststation[min(which(!is.na(specmea))):.N,ts(specmea, frequency=7, start=min(as.Date(date)))]
-tstemp <- teststation[, ts(tempmea, frequency=7, start=min(as.Date(date)))]
-tswind <- teststation[, ts(windmea, frequency=7, start=min(as.Date(date)))]
-tsrh <- teststation[, ts(rhmea, frequency=7, start=min(as.Date(date)))]
+#------------- Make union of time series -------------####
+tsspec <- teststation[min(which(!is.na(specmea))):.N,ts(specmea, frequency=1, start=min(as.Date(date)))]
+tsspec7 <- teststation[min(which(!is.na(specmea))):.N,ts(specmea, frequency=7, start=min(as.Date(date)))]
+tstemp <- teststation[, ts(tempmea, frequency=1, start=min(as.Date(date)))]
+tswind <- teststation[, ts(windmea, frequency=1, start=min(as.Date(date)))]
+tsrh <- teststation[, ts(rhmea, frequency=1, start=min(as.Date(date)))]
 tsformat <- ts.union(tsspec, tstemp, tswind, tsrh)
 dim(tsformat)
 
-#Check auto.arima
+#------------- Check auto.arima -------------####
 acf(tsspec, na.action = na.pass)
-auto.arima(tsspec1) #Too many missing values
-auto.arima(tsspec)
+auto.arima(tsspec) 
+auto.arima(tsspec7) #Too many missing values
 
-#MARSS analysis without covariates
+#------------- MARSS analysis without covariates -------------####
 mod.list <- list(
   B=matrix('b'), U=matrix('u'), Q=matrix("q"),
   Z=matrix(1), A=matrix(0), R=matrix(0),
@@ -216,7 +231,7 @@ mod.list <- list(
 
 spec_format <- as.matrix(dcast(teststation[min(which(!is.na(specmea))):.N, .(date, specmea)], 
                                .~date, value.var = 'specmea')[,-1])
-fit <- MARSS(spec_format, model=mod.list)
+fit <- MARSS(100*spec_format, model=mod.list)
 
 ggplot(teststation[min(which(!is.na(specmea))):.N,], aes(x=date, y=specmea)) +
   geom_point() +
@@ -232,59 +247,93 @@ plot(resids$state.residuals[1,],
 abline(h=0)
 acf(resids$model.residuals[1,], main="flat level v(t)")
 
-#StructTS analysis
-sts_dat <- as.vector(teststation[min(which(!is.na(specmea))):.N, specmea])
-fit.sts <- StructTS(sts_dat, type="level")
-fit.sts
-fit.sts$loglik
+#------------- Format covariates -------------####
+covar_format <- t(teststation[min(which(!is.na(specmea))):.N, 
+                              lapply(.SD, function(x) scale(na.interp(x))), 
+                              .SDcols = c('tempmea', 'windmea')]) #'rhmea'
+row.names(covar_format) <- c('tempmea', 'windmea')
+
+#------------- MARSS model with covariates of observation error, process-error and observation-error -------------####
+mod.list_covobs <- list(
+  B=matrix('b'), U=matrix('u'), C=matrix(0), Q=matrix("q"),
+  Z=matrix(1), A=matrix(0), D='unconstrained', R=matrix('r'),
+  d=covar_format)
+fit_covobs <- MARSS(100*spec_format, model=mod.list_covobs)
 
 ggplot(teststation[min(which(!is.na(specmea))):.N,], aes(x=date, y=specmea)) +
   geom_point() +
-  geom_line(aes(y=(fit.sts$fitted)), color='red', size=1.3)
+  geom_line(aes(y=fit_covobs$states[1,]), color='red', size=1, alpha=1/3) 
 
-#MARSS model with covariates of states, process-error only model
-covar_format <- t(teststation[min(which(!is.na(specmea))):.N, 
-                              lapply(.SD, na.interp), 
-                              .SDcols = c('tempmea', 'windmea')]) #'rhmea' 
+covobs_resids <- residuals(fit_covobs)
+plot.ts(covobs_resids$model.residuals[1,], na.action=na.omit)
+acf(covobs_resids$model.residuals[1,], na.action=na.omit)
+plot.ts(covobs_resids$state.residuals[1,], na.action=na.omit)
+acf(covobs_resids$state.residuals[1,], na.action=na.omit)
 
+#------------- MARSS model with covariates of states, process-error only model -------------####
 mod.list_covproc <- list(
-  B=matrix('b'), U=matrix(0), C='unconstrained', Q=matrix("q"),
+  B=matrix('b'), U=matrix('u'), C='unconstrained', Q=matrix("q"),
   Z=matrix(1), A=matrix(0), R=matrix(0),
   c=covar_format)
 
-fit_covproc <- MARSS(spec_format, model=mod.list_covproc)
-
-ggplot(teststation[min(which(!is.na(specmea))):.N,], aes(x=date, y=specmea)) +
-  geom_point() +
-  geom_line(aes(y=fit_covproc$states[1,]), color='red', size=1, alpha=1/3)
+fit_covproc <- MARSS(100*spec_format, model=mod.list_covproc)
 
 covproc_resids <- residuals(fit_covproc)$model.residuals[1,]
 plot.ts(covproc_resids)
 acf(covproc_resids)
 
-#MARSS model with covariates of observation error, process-error and observation-error
-mod.list_covobs <- list(
-  B=matrix('b'), U=matrix(0), C=matrix(0), Q=matrix("q"),
-  Z=matrix(1), A=matrix(0), D='unconstrained', R=matrix('r'),
-  d=covar_format)
-fit_covobs <- MARSS(spec_format, model=mod.list_covobs)
-
-ggplot(teststation[min(which(!is.na(specmea))):.N,], aes(x=date, y=specmea)) +
-  geom_point() +
-  geom_line(aes(y=fit_covobs$states[1,]), color='red', size=1, alpha=1/3)
-
-covobs_resids <- residuals(fit_covobs)$state.residuals[1,]
-plot.ts(covobs_resids, na.action=na.omit)
-acf(covobs_resids, na.action=na.omit)
-
 #Compare models
-c(fit$AICc, fit_covproc$AICc, fit_covobs$AICc)
+c(fit$AICc, fit_covobs$AICc, fit_covproc$AICc)
 
 #Check residuals
 auto.arima(ts(covproc_resids, frequency=7))
 auto.arima(covobs_resids)
 auto.arima(ts(covobs_resids, frequency=7))
 
+#Check states without covariate effect
+pred_nocovar <- fit_covproc$model$data[1,] -
+  (fit_covproc$coef['C.(X.Y1,tempmea)']*covar_format[1,] +
+     fit_covproc$coef['C.(X.Y1,windmea)']*covar_format[2,])
+pred_nocovar <- data.frame(pred=pred_nocovar, teststation[min(which(!is.na(specmea))):.N, .(date, UID)])
 
+ggplot(teststation[!is.na(specmea),], aes(x=date, y=100*specmea)) +
+  geom_point() +
+  geom_line(aes(group=1), color='black') +
+  geom_line(data=pred_nocovar[!is.na(pred_nocovar$pred),],
+            aes(x=date, y=pred, group=UID), color='red', size=1, alpha=1/2)
+
+#------------- Add day of the week as fixed effect ---------------------####
+#https://nwfsc-timeseries.github.io/atsa-labs/sec-msscov-season.html
+# number of days of the week
+period <- 7
+TT <- dim(spec_format)[2]
+# first week day (Sunday:1, Monday:2)
+per.1st <- teststation[min(which(!is.na(specmea))), as.numeric(weekday)]
+# create factors for days of the week
+c.in <- diag(period)
+for(i in 1:(ceiling(TT/period))) {c.in <- cbind(c.in,diag(period))}
+# trim c.in to correct start & length
+c.in <- c.in[,(1:TT)+(per.1st-1)]
+# better row names
+rownames(c.in) <- weekday_levels
+
+#Add week days to covariates
+covar_formatwd <- rbind(c.in, covar_format)
+Cweekdays = c(weekday_levels, 'temp', 'wind') #'rh
+  
+  
+#Model paramter list with week days
+mod.list_covproc_wd <- list(
+  B=matrix('b'), U=matrix(0), C=matrix(t(Cweekdays)), Q=matrix("q"),
+  Z=matrix(1), A=matrix(0), D=matrix(0), R=matrix(0),
+  c=covar_formatwd)
+fit_covproc_wd <- MARSS(spec_format, model=mod.list_covproc_wd)
+
+ggplot(teststation[min(which(!is.na(specmea))):.N,], aes(x=date, y=specmea)) +
+  geom_point() +
+  geom_line(aes(y=fit_covproc_wd$states[1,]), color='red', size=1, alpha=1/3)
+
+#Compare models
+c(fit$AICc, fit_covobs$AICc, fit_covproc$AICc, fit_covproc_wd$AICc)
 
 
