@@ -225,13 +225,16 @@ resdf[86:119,'type'] <- 'recalibrated'
 
 #Plot result comparison
 fun_mean <- function(x){
-  return(data.frame(y=mean(x),label=format(10^mean(x,na.rm=T), digits=4)))}
+  return(data.frame(y=mean(x),label=format(10^mean(x,na.rm=T), digits=2)))}
 
+png(file.path(datadir, 'XRF20180808\\Duplextests\\recalibration_summary.png'),width=16, height=8, units='in',res=300)
 ggplot(resdf, aes(x=Element,y=Net)) + 
   geom_boxplot(aes(color=type)) + 
   scale_y_log10()+
   stat_summary(fun.data = fun_mean,aes(group=type),geom="text", vjust=-0.7,angle=45, position=position_dodge(.9)) + 
   theme_bw()+
   theme(text=element_text(size=16))
+dev.off()
 
-sdref <- setDT(resdf[resdf$type=='reference'])[,sd(Net)/mean(Net),by=.(Element)]
+cvref <- setDT(resdf[resdf$type=='reference',])[,sd(Net)/mean(Net),by=.(Element)]
+cvref

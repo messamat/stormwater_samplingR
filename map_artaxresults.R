@@ -513,6 +513,7 @@ colnames(fieldata)[1] <- 'SiteID'
 fieldata$SiteID <- as.character(fieldata$SiteID)
 fieldata_sel <- fieldata[!is.na(fieldata$XRFmin) & !is.na(fieldata$SiteID),] #Remove extraneous sites with no XRF data or just for TNC tour
 fieldata_format <- data.frame()
+#Create separate records for each XRF measurement (rather than one record with XRFmin and XRFmax)
 for (row in seq(1,nrow(fieldata_sel))) {
   extract <- fieldata_sel[row,]
   for (xrf in seq(fieldata_sel[row,'XRFmin'], fieldata_sel[row,'XRFmax'])){
@@ -3920,8 +3921,6 @@ Znmod42plot
 png(file.path(moddir, 'scatterplot_Zn_mod42.png'), width=9, height=9, units='in', res=300)
 Znmod42plot
 dev.off()
-
-
 
 #------ 13. Zn - Check spatial and temporal autocorrelation of residuals for full dataset -------
 resnorm <- rstandard(modlistlogZn[[31]]) #Get standardized residuals from model

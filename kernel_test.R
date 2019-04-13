@@ -9,8 +9,8 @@ library(ggplot2)
 library(data.table)
 
 #### ------ Get example traffic map to get resolution from ----- #####
-res <- 'F:/Levin_Lab/stormwater/results/bing'
-reclassmlc <- file.path(res,"bingmeanod")
+res <- 'C:/Mathis/ICSL/stormwater/results/bing'
+reclassmlc <- file.path(res,"181204_02_00_class_mlc.tif")
 
 #### ------ Function to produce kernel ----- #####
 weightedkernel <- function(raster_file, maxdist, shape, p, outkernel) {
