@@ -1,12 +1,11 @@
-
-
 library(ggplot2)
 library(plotly)
 library(data.table)
 library(rgdal)
 library(sf)
+library(olsrr)
 
-rootdir <- "C:/Mathis/ICSL/stormwater"
+rootdir <- "D:/Mathis/ICSL/stormwater"
 datadir <- file.path(rootdir, 'data')
 setwd(file.path(rootdir,"results"))
 OSMSeattle <- as.data.table(readOGR(dsn = 'PSOSM.gdb', layer = 'OSMSeattle_datajoin'))
@@ -14,13 +13,16 @@ OSMPierce <- as.data.table(readOGR(dsn = 'PSOSM.gdb', layer = 'OSMPierce_datajoi
 OSMKing <- as.data.table(readOGR(dsn = 'PSOSM.gdb', layer = 'OSMKing_datajoin_sel'))
 OSMSDOT <- as.data.table(st_read(dsn = 'PSOSM.gdb', layer ='OSM_WSDOT_joinstats'))
 
-streets <- as.data.table(readOGR(file.path(datadir, 'CitySeattle_20180601/Seattle_Streets/Seattle_Streets.shp')))
-streets[, `:=`(OBJECTID = as.integer(as.character(OBJECTID)),
-               SLOPE_PCT = as.numeric(as.character(SLOPE_PCT)))]
-elv19range <- as.data.table(st_read(dsn = 'PSOSM.gdb', layer ='Seattle_elv19range'))
-elv19range_smooth <- as.data.table(st_read(dsn = 'PSOSM.gdb', layer ='Seattle_elv19range_smooth'))
-elv13range <- as.data.table(st_read(dsn = 'PSOSM.gdb', layer ='Seattle_elv13range'))
-elv13range_smooth <- as.data.table(st_read(dsn = 'PSOSM.gdb', layer ='Seattle_elv13range_smooth'))
+# streets <- as.data.table(readOGR(file.path(datadir, 'CitySeattle_20180601/Seattle_Streets/Seattle_Streets.shp')))
+# streets[, `:=`(OBJECTID = as.integer(as.character(OBJECTID)),
+#                SLOPE_PCT = as.numeric(as.character(SLOPE_PCT)))]
+# elv19range <- as.data.table(st_read(dsn = 'PSOSM.gdb', layer ='Seattle_elv19range'))
+# elv19range_smooth <- as.data.table(st_read(dsn = 'PSOSM.gdb', layer ='Seattle_elv19range_smooth'))
+# elv13range <- as.data.table(st_read(dsn = 'PSOSM.gdb', layer ='Seattle_elv13range'))
+# elv13range_smooth <- as.data.table(st_read(dsn = 'PSOSM.gdb', layer ='Seattle_elv13range_smooth'))
+
+streets_elv <- as.data.table(readOGR(file.path(rootdir, 'results/PSOSM.gdb'), layer = 'Seattle_roadproj'))
+str(streets_elv)
 
 ##############################################################################################################
 # #Relate Open Street Map functional class to traffic volume for Pierce County and Seattle traffic data
@@ -97,37 +99,51 @@ ggplot(OSMbind, aes(x=maxspeed, y=SpeedLimit)) +
 # #Check accuracy of estimated road gradient using NED 1/3 and 1/9 arc seconds compared to Seattle gradient data
 ##############################################################################################################
 #Compare Seattle estimated road gradient to actual one
-streets_elv <- streets[elv19range, on='OBJECTID==Value']
-setnames(streets_elv, 'RANGE', 'RANGE19')
-streets_elv <- streets_elv[elv19range_smooth, on='OBJECTID==Value']
-setnames(streets_elv, 'RANGE', 'RANGE19smooth')
-streets_elv <- streets_elv[elv13range, on='OBJECTID==Value']
-setnames(streets_elv, 'RANGE', 'RANGE13')
-streets_elv <- streets_elv[elv13range_smooth, on='OBJECTID==Value']
-setnames(streets_elv, 'RANGE', 'RANGE13smooth')
-
-streets_elv[, `:=`(gradient19 = RANGE19/SHAPE_Leng,
-                   gradient19_smooth = RANGE19smooth/SHAPE_Leng,
-                   gradient13 = RANGE13/SHAPE_Leng,
-                   gradient13_smooth = RANGE13smooth/SHAPE_Leng)]
-
-grad19 <- ggplot(streets_elv, aes(x=100*gradient19_smooth, y=SLOPE_PCT, label=SHAPE_Leng)) + 
+grad19 <- ggplot(streets_elv, aes(x=gradient19, y=SLOPE_PCT, label=SHAPE_Leng)) + 
   geom_jitter()+
   geom_smooth(method='lm') + 
   geom_abline(slope=1)
 grad19
 
-grad13 <- ggplot(streets_elv, aes(x=100*gradient13_smooth, y=SLOPE_PCT, label=SHAPE_Leng)) + 
+grad19 <- ggplot(streets_elv, aes(x=gradient19m_split25, y=SLOPE_PCT, label=SHAPE_Leng)) + 
+  geom_jitter()+
+  geom_smooth(method='lm') + 
+  geom_abline(slope=1)
+grad19
+
+grad19 <- ggplot(streets_elv, aes(x=gradient19_smooth, y=SLOPE_PCT, label=SHAPE_Leng)) + 
+  geom_jitter()+
+  geom_smooth(method='lm') + 
+  geom_abline(slope=1)
+grad19
+
+grad19 <- ggplot(streets_elv, aes(x=gradient19_smoothm_split25, y=SLOPE_PCT, label=SHAPE_Leng)) + 
+  geom_jitter()+
+  geom_smooth(method='lm') + 
+  geom_abline(slope=1)
+grad19
+
+grad13 <- ggplot(streets_elv, aes(x=gradient13m_split25, y=SLOPE_PCT, label=SHAPE_Leng)) + 
   geom_jitter()+
   geom_smooth(method='lm') + 
   geom_abline(slope=1)
 grad13
 
-ggplot(streets_elv, aes(x=gradient13_smooth, y=gradient19_smooth, label=SHAPE_Leng)) + 
+ggplot(streets_elv, aes(x=gradient19_smoothm_split10, y=gradient19_smoothm_split25, label=SHAPE_Leng)) + 
   geom_jitter()
 
-summary(lm(SLOPE_PCT~gradient19, data=streets_elv))
-summary(lm(SLOPE_PCT~gradient19_smooth, data=streets_elv))
-summary(lm(SLOPE_PCT~gradient13, data=streets_elv))
-summary(lm(SLOPE_PCT~gradient13_smooth, data=streets_elv))
-summary(lm(gradient19_smooth~gradient13_smooth, data=streets_elv))
+ols_regress(SLOPE_PCT~gradient19m_split10, data=streets_elv)
+ols_regress(SLOPE_PCT~gradient19m_split25, data=streets_elv)
+ols_regress(SLOPE_PCT~gradient19, data=streets_elv)
+
+ols_regress(SLOPE_PCT~gradient19_smoothm_split10, data=streets_elv)
+ols_regress(SLOPE_PCT~gradient19_smoothm_split25, data=streets_elv)
+ols_regress(SLOPE_PCT~gradient19_smooth, data=streets_elv)
+
+ols_regress(SLOPE_PCT~gradient13m_split10, data=streets_elv)
+ols_regress(SLOPE_PCT~gradient13m_split25, data=streets_elv)
+ols_regress(SLOPE_PCT~gradient13, data=streets_elv)
+
+ols_regress(SLOPE_PCT~gradient13_smoothm_split10, data=streets_elv)
+ols_regress(SLOPE_PCT~gradient13_smoothm_split25, data=streets_elv)
+ols_regress(SLOPE_PCT~gradient13_smooth, data=streets_elv)
