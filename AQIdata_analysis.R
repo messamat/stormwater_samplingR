@@ -336,8 +336,8 @@ c.in <- c.in[,(1:TT)+(per.1st-1)]
 rownames(c.in) <- weekday_levels
 
 #Add week days to covariates
-covar_formatwd <- rbind(c.in, covar_format[c('tempmea', 'windmea'),])
-Cweekdays = c(weekday_levels, 'tempmea', 'windmea') #'rh
+covar_formatwd <- rbind(c.in, covar_format)
+Cweekdays = c(weekday_levels, rownames(covar_format)) #'rh
 
 #------------- 2a. MARSS ARMA model with covariates of observation error, process-error and observation-error -------------####
 mod.list_covobs <- list(
@@ -482,9 +482,9 @@ acf(covobs_wd_resids)
 #------------- 3b. MARSS model with state covariates - add day of the week as fixed effect to process ---------------------####
 #Model paramter list with week days (will not converge with B=1 and U=matrix('u'))
 mod.list_covproc_wd <- list(
-  B=matrix('u'), U=matrix(0), C=matrix(t(Cweekdays)), Q=matrix("q"),
+  B=matrix('u'), U=matrix(0), C=matrix(t(c(weekday_levels, 'tempmea', 'windmea'))), Q=matrix("q"),
   Z=matrix(1), A=matrix(0), D=matrix(0), R=matrix(0),
-  c=covar_formatwd)
+  c=covar_formatwd[c(weekday_levels, 'tempmea', 'windmea'),])
 fit_covproc_wd <- MARSS(100*spec_format, model=mod.list_covproc_wd)
 
 #States
@@ -494,19 +494,77 @@ ggplot(teststation[,], aes(x=date, y=100*specmea)) +
 
 #Kalman filter predictions of states
 kf_covproc_wd <- print(fit_covproc_wd, what="kfs")
-covproc_wd_p_kf <- ggplot(teststation, aes(x=date, y=100*specmea)) +
-  geom_point() +
-  geom_line(aes(y=kf_covproc_wd$xtt1[1,]), color='red', size=1) 
+covproc_wd_p_kf <- ggplot(teststation, aes(x=date, group=1)) +
+  geom_point(aes(y=100*specmea)) +
+  geom_line(aes(y=kf_covproc_wd$xtt1[1,]), color='red', size=1, alpha=1/2) 
 covproc_wd_p_kf
 
 #Check residuals
-covproc_wd_resids <- residuals(fit_covproc_wd)$model.residuals[1,]
+covproc_wd_resids <- residuals(fit_covproc_wd)$residuals[1,]
 plot.ts(covproc_wd_resids)
 acf(covproc_wd_resids)
 
 #Compare models
 c(fit$AICc, fit_covobs$AICc, fit_covproc$AICc, fit_covobs_wd$AICc, fit_covproc_wd$AICc)
 
-#------------- Add lagged wind and temperature by one day  ---------------------####
+#------------- 3c. Add lagged wind and temperature by one day  ---------------------####
+mod.list_covproc_wdlag <- list(
+  B=matrix('u'), U=matrix(0), C=matrix(t(Cweekdays)), Q=matrix("q"),
+  Z=matrix(1), A=matrix(0), D=matrix(0), R=matrix(0),
+  c=covar_formatwd)
+fit_covproc_wdlag <- MARSS(100*spec_format, model=mod.list_covproc_wdlag)
+
+mod.list_covproc_wdlag_windonly <- list(
+  B=matrix('u'), U=matrix(0), 
+  C=matrix(t(Cweekdays[-which(Cweekdays %in% c('tempmea', 'tempmea_lag1', 'tempmea_lag2'))])), Q=matrix("q"),
+  Z=matrix(1), A=matrix(0), D=matrix(0), R=matrix(0),
+  c=covar_formatwd[-which(Cweekdays %in% c('tempmea', 'tempmea_lag1', 'tempmea_lag2')),])
+fit_covproc_wdlag_windonly <- MARSS(100*spec_format, model=mod.list_covproc_wdlag_windonly)
+
+mod.list_covproc_wdlag_windonly2 <- list(
+  B=matrix('u'), U=matrix(0), 
+  C=matrix(t(Cweekdays[-which(Cweekdays %in% c('windmea_lag2', 'tempmea', 'tempmea_lag1', 'tempmea_lag2'))])), Q=matrix("q"),
+  Z=matrix(1), A=matrix(0), D=matrix(0), R=matrix(0),
+  c=covar_formatwd[-which(Cweekdays %in% c('windmea_lag2', 'tempmea', 'tempmea_lag1', 'tempmea_lag2')),])
+fit_covproc_wdlag_windonly2 <- MARSS(100*spec_format, model=mod.list_covproc_wdlag_windonly2)
+
+mod.list_covproc_wdlag_windonly3 <- list(
+  B=matrix('u'), U=matrix(0), 
+  C=matrix(t(Cweekdays[-which(Cweekdays %in% c('windmea_lag2','tempmea_lag1', 'tempmea_lag2'))])), Q=matrix("q"),
+  Z=matrix(1), A=matrix(0), D=matrix(0), R=matrix(0),
+  c=covar_formatwd[-which(Cweekdays %in% c('windmea_lag2', 'tempmea_lag1', 'tempmea_lag2')),])
+fit_covproc_wdlag_windonly3 <- MARSS(100*spec_format, model=mod.list_covproc_wdlag_windonly3)
+
+#States
+ggplot(teststation[,], aes(x=date, y=100*specmea)) +
+  geom_point() +
+  geom_line(aes(y=fit_covproc_wdlag$states[1,]), color='red', size=1, alpha=1/3)
+
+#Kalman filter predictions of states
+kf_covproc_wdlag <- print(fit_covproc_wdlag, what="kfs")
+covproc_wdlag_p_kf <- ggplot(teststation, aes(x=date, y=100*specmea)) +
+  geom_point() +
+  geom_line(aes(y=kf_covproc_wdlag$xtt1[1,]), color='red', size=1) 
+covproc_wdlag_p_kf
+
+#Check residuals
+covproc_wdlag_resids <- residuals(fit_covproc_wdlag)$model.residuals[1,]
+plot.ts(covproc_wdlag_resids)
+acf(covproc_wdlag_resids)
+
+#Compare models
+c(fit$AICc, fit_covobs$AICc, fit_covproc$AICc, fit_covobs_wd$AICc, fit_covproc_wd$AICc,
+  fit_covproc_wdlag$AICc, fit_covproc_wdlag_windonly$AICc, fit_covproc_wdlag_windonly2$AICc, 
+  fit_covproc_wdlag_windonly3$AICc)
+
 
 #------------- Add # of antecedent days without winds  ---------------------####
+
+
+
+
+
+
+###################################################################################
+#Local linear penalize regression 
+#Time series model of average accounting for day of the week
