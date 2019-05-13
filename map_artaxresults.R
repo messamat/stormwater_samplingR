@@ -508,9 +508,10 @@ weightmat_IDW <- function(coords, knb, mindist = 10) {
 # 1. Import data 
 ############################################################################################################################################
 ########### ---- A. Import and format field data ---- ####
-fieldata <- read.csv(file.path(datadir,"field_data/field_data_raw_20180808_edit.csv"))
+fieldata <- read.csv(file.path(datadir,"field_data/field_data_raw_20190430_edit.csv"))
 colnames(fieldata)[1] <- 'SiteID'
 fieldata$SiteID <- as.character(fieldata$SiteID)
+fieldata$Date <- as.Date(as.character(fieldata$Date), format='%m/%d/%Y')
 fieldata_sel <- fieldata[!is.na(fieldata$XRFmin) & !is.na(fieldata$SiteID),] #Remove extraneous sites with no XRF data or just for TNC tour
 fieldata_format <- data.frame()
 #Create separate records for each XRF measurement (rather than one record with XRFmin and XRFmax)
@@ -522,16 +523,27 @@ for (row in seq(1,nrow(fieldata_sel))) {
     fieldata_format <- rbind(fieldata_format, extract)
   }
 }
+#Separate summer 2018 and spring 2019 records as XRF ids have been reset and are thus duplicates
+fieldata_format[fieldata_format$Date<'2019/01/01', 'season'] <- 'summer2018'
+fieldata_format[fieldata_format$Date>'2019/01/01', 'season'] <- 'spring2019'
+
 
 ########### ---- B. Import and format field XRF deconvolution results ---- ####
-fieldXRF <- deconvolution_import(file.path(datadir, 'XRF20181210/PostBrukerCalibration/deconvolutionresults_XRF12_245_20181215'),
+fieldXRF_summer2018 <- deconvolution_import(file.path(datadir, 'XRF20190501/PostBrukerCalibration/deconvolutionresults_XRF12_245_20181215'),
+                                 idstart = 41, idend= 43)
+fieldXRF_spring2019 <- deconvolution_import(file.path(datadir, 'XRF20190501/2019_MarchApril/deconvolutionresults_XRF39_161_20190513'),
                                  idstart = 41, idend= 43)
 
+fieldXRF_summer2018[,'season'] <- 'summer2018'
+fieldXRF_spring2019[,'season'] <- 'spring2019'
+
+fieldXRF <- rbind(fieldXRF_summer2018, fieldXRF_spring2019)
+
 ########### ---- C. Import raw XRF lab data for inspection ---- ####
-labxrf_list <- data.table(filename = grep('\\.csv$', list.files(file.path(datadir, 'XRF20181210/PelletMeasurements')) ,value=T))
+labxrf_list <- data.table(filename = grep('\\.csv$', list.files(file.path(datadir, 'XRF20190501/PelletMeasurements')) ,value=T))
 for (i in labxrf_list$filename) {
   print(i)
-  xrfrec <- read.csv(file.path(datadir, 'XRF20181210/PelletMeasurements', i))
+  xrfrec <- read.csv(file.path(datadir, 'XRF20190501/PelletMeasurements', i))
   labxrf_list[filename == i, `:=`(cps = as.numeric(as.character(xrfrec[rownames(xrfrec) == 'Valid Count Last Packet',])),
                                   c_cum = as.numeric(as.character(xrfrec[rownames(xrfrec) == 'Valid Accumulated Counts',])),
                                   duration = as.numeric(as.character(xrfrec[rownames(xrfrec) == 'Duration Time',]))
@@ -539,6 +551,7 @@ for (i in labxrf_list$filename) {
 }
 setDT(labxrf_list)[, `:=`(c_cum_ps = c_cum/duration,
                           SiteID = regmatches(labxrf_list$filename, regexpr('[0-9A-Z]+[_][0-9]', labxrf_list$filename)))]
+labxrf_list[, season := 'summer2018']
 
 #List of initially problematic samples that had to be re-measured
 # problem_recs <- setDT(labxrf_list)[SiteID %in% c('3A_1', '3A_2','6B_2','7A_1', '7A_2','19A_1', '19A_2', '20A_1',
@@ -550,12 +563,12 @@ setDT(labxrf_list)[, `:=`(c_cum_ps = c_cum/duration,
 labxrf_list[c_cum_ps > 90000,] #[!(labxrf_list[c_cum_ps > 90000, SiteID] %in% problem_recs$SiteID)]
 
 ########### ---- D. Import and format lab XRF deconvolution results ---- ####
-labXRF <- deconvolution_import(file.path(datadir, 'XRF20181210/PelletMeasurements/deconvolutionresults_labXRF_20181215'),
+labXRF <- deconvolution_import(file.path(datadir, 'XRF20190501/PelletMeasurements/deconvolutionresults_labXRF_20181215'),
                                idstart = 29, idend= 33)
-# ---- Summarize labXRF mean net for each element and Net/Background ratio ----
-#Look at determinants of noise
+labXRF[, season := 'summer2018']
+########### ---- E. Look at determinants of signalratio (noise) ----
 fieldXRFsummary <- fieldXRF[,list(meannet = mean(Net),
-                                  noise = mean(Net/Backgr.)), .(Element, Line, Energy.keV)]
+                                  signalratio = mean(Net/Backgr.)), .(Element, Line, Energy.keV)]
 keVmaxnet <- unique(fieldXRFsummary) %>% #Only keep Element-Line-Energy characteristics of each element
   setkey(meannet) %>% #Classify from low to high energy 
   .[,.SD[.N], by=Element] #Only keep line with the highest average net photon count
@@ -563,22 +576,23 @@ keVmineV <- unique(fieldXRFsummary) %>% #Only keep Element-Line-Energy character
   setkey(Energy.keV)%>% #Classify from low to high energy 
   .[,.SD[1], by=Element] #Only keep line with the lowest average net photon count
 
-ggplot(keVmaxnet, aes(x=log(meannet+1), y=noise)) +
+
+ggplot(keVmaxnet, aes(x=log(meannet+1), y=signalratio)) +
   geom_text(aes(label=Element)) +
   scale_y_log10() +
   geom_smooth(span=1)
 
-ggplot(keVmaxnet, aes(x=Energy.keV, y=noise)) +
+ggplot(keVmaxnet, aes(x=Energy.keV, y=signalratio)) +
   geom_text(aes(label=Element)) +
   scale_y_log10() +
   geom_smooth(span=1)
 
-ggplot(keVmineV, aes(x=Energy.keV, y=noise)) +
+ggplot(keVmineV, aes(x=Energy.keV, y=signalratio)) +
   geom_text(aes(label=Element)) +
   scale_y_log10() +
   geom_smooth(span=1)
 
-########### ---- E. Import ICP-OES data ---- ####
+########### ---- F. Import ICP-OES data ---- ####
 ICPdat <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_120618-2_edit20181210.xlsx'),
                     1, stringsAsFactors = F)
 ICPthresholds <- read.xlsx(file.path(datadir, '/ICP_OES_20181206/mathis_ICP_120618-2_edit20181210.xlsx'),
@@ -587,8 +601,8 @@ rownames(ICPthresholds) <- gsub('\\W', '', ICPthresholds[,1]) #Clean sample IDs
 ICPthresholds_format <- as.data.table(t(ICPthresholds[,-1])) %>%
   .[, Elem := colnames(ICPthresholds)[-1]]
 
-########### ---- F. Import GIS data (including pollution variables) ---- ####
-trees <- as.data.table(readOGR(dsn = file.path(resdir, 'Seattle_sampling.gdb'), layer = 'XRFsites_proj'))
+########### ---- G. Import GIS data (including pollution variables) ---- ####
+trees <- as.data.table(readOGR(dsn = file.path(resdir, 'PSPredictions.gdb'), layer = 'XRFsites_proj'))
 #summary(trees)
 heatcols <- colnames(trees)[grep('heat', colnames(trees))]
 trees[, (heatcols) := lapply(.SD, function(x){x[is.na(x)] <- 0; x}), .SDcols = heatcols]
@@ -596,7 +610,7 @@ colnames(trees)[1] <- 'SiteID'
 trees <- trees[!(SiteID %in% c('NA', NA)),]
 trees[, NLCD_reclass_final_PS := as.factor(NLCD_reclass_final_PS)]
 
-########### ---- G. Define elements associated with car traffic ---- ####
+########### ---- H. Define elements associated with car traffic ---- ####
 #Elements present in brake linings and emitted brake dust (from Thorpe et al. 2008)
 brakelining_elem <- c('Al', 'As', 'Ba', 'Ca', 'Cd', 'Co' ,'Cr', 'Cu', 'Fe', 'K', 'Li', 'Mg', 
                       'Mn', 'Mo', 'Na', 'Ni', 'Pb', 'Sb', 'Se', 'Sr', 'Zn') 
@@ -610,19 +624,19 @@ tire_elem <- c('Al', 'Ba', 'Ca', 'Cd', 'Co', 'Cr', 'Cu', 'Fe', 'K', 'Mg', 'Mn', 
 ############################################################################################################################################
 ########### ---- A. Format XRF data ---- ####
 # ---- 1. Cast while summing net photon counts across electron transitions ----
-fieldXRFcast <- dcast(setDT(fieldXRF), XRFID~Element, value.var='Net', fun.aggregate=sum) 
+fieldXRFcast <- dcast(setDT(fieldXRF), XRFID+season~Element, value.var='Net', fun.aggregate=sum) 
 fieldXRFcast[, XRFID := as.numeric(gsub('[_]', '', XRFID))] #Format site number
 fieldXRFcast[fieldXRFcast < 0] <- 0 #Floor negative net photon count to 0
 
-labXRFcast <- dcast(setDT(labXRF), XRFID~Element, value.var='Net', fun.aggregate=sum)
+labXRFcast <- dcast(setDT(labXRF), XRFID+season~Element, value.var='Net', fun.aggregate=sum)
 labXRFcast[labXRFcast < 0] <- 0
 
 # ---- 2. Normalize data by Rhodium photon count for field and lab results ----
-fieldXRFcastnorm <- fieldXRFcast[, lapply(.SD, function(x) {x/Rh}), by = XRFID]
-labXRFcastnorm <- labXRFcast[, lapply(.SD, function(x) {x/Rh}), by = XRFID]
+fieldXRFcastnorm <- fieldXRFcast[, lapply(.SD, function(x) {x/Rh}), by = .(XRFID, season)]
+labXRFcastnorm <- labXRFcast[, lapply(.SD, function(x) {x/Rh}), by = .(XRFID, season)]
 
 # ---- 3. Merge datasets: lab XRF + field XRF + field variables ----
-fieldt <- setDT(fieldata_format)[fieldXRFcastnorm, on='XRFID']
+fieldt <- setDT(fieldata_format)[fieldXRFcastnorm, on=.(XRFID, season)]
 
 labXRFcastnorm[, `:=`(SiteID = gsub('[A-B].*', '', XRFID),
                       Pair = gsub('[0-9_]+', '', XRFID),
@@ -666,7 +680,7 @@ fieldXRF_format <- melt(field_artaxstats, id.vars=c('SiteID','Pair'), variable.n
 # ---- 6. Write out mean XRF values (should write this directly to XRF sites proj) ----
 field_artaxmean <- field_artaxstats[, .SD, .SDcols = c(1,2, grep('mean', colnames(field_artaxstats)))] 
 colnames(field_artaxmean) <- gsub('_mean', '', colnames(field_artaxmean))
-write.dbf(field_artaxmean, 'field_artaxmean_20180827.dbf')
+write.dbf(field_artaxmean, 'field_artaxmean_20190501.dbf')
 
 lab_artaxmean <- lab_artaxstats[, .SD, .SDcols = c(1,2, grep('mean', colnames(lab_artaxstats)))] 
 colnames(lab_artaxmean) <- gsub('_mean', '', colnames(lab_artaxmean))
@@ -674,7 +688,7 @@ colnames(lab_artaxmean) <- gsub('_mean', '', colnames(lab_artaxmean))
 # ---- 7. Check field XRF data distribution by element then transform and standardize ----
 #Use Tukey ladder computation to determine each variable's transformation (only on numeric columns with more than 1 unique observation)
 fieldXRF_format[Elem %in% fieldXRF_format[, length(unique(mean))>1, by=Elem][V1==T, Elem],
-                transmean := transformTukey_lambda(mean, start = -2, end = 2,int = 0.025, 
+                transmean := transformTukey_lambda(mean, start = -2.5, end = 2.5,int = 0.025, 
                                                    rastertab=F,rep=100, verbose = FALSE, 
                                                    statistic = 1)[[1]], by=Elem]
 #Run a shapiro test on each element
@@ -880,42 +894,43 @@ ggplot(fieldXRF_format[!(fieldXRF_format$Elem %in% c('Rh','Pd','Ar')),], aes(x=c
   theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
         strip.text = element_text(size=14))
 
-#Plot relationship between elemental concentration and cv
+# #Plot relationship between elemental concentration and cv
 # ggplotly(
-#   ggplot(fieldXRF_format[!(fieldXRF_format$Elem %in% c('Rh','Pd','Ar')),], 
-#          aes(x=mean, y=cv, color=name, label=paste0(SiteID, Pair))) + 
+#   ggplot(fieldXRF_format[!(fieldXRF_format$Elem %in% c('Rh','Pd','Ar')),],
+#          aes(x=mean, y=cv, color=name, label=paste0(SiteID, Pair))) +
 #     geom_point()+
 #     geom_smooth() +
-#     labs(x='Mean photon count (normalized)', y='Coefficient of variation') + 
+#     labs(x='Mean photon count (normalized)', y='Coefficient of variation') +
 #     facet_wrap(~name, scales='free') +
-#     theme_classic() + 
+#     theme_classic() +
 #     theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
 #           strip.text = element_text(size=14))
 # )
 # 
 # #
-# for (elem in unique(fieldXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
-#   print(elem)
-#   png(file.path(inspectdir, paste0('fieldXRF_withintree_',elem,'.png')), width = 20, height=12, units='in', res=300)
-#   print(
-#     ggplot(fieldt, 
-#            aes(x=paste0(SiteID, Pair), y = get(elem), fill=Pair)) + 
-#       geom_line(aes(group=paste0(SiteID, Pair)), color='black') +
-#       geom_point(size=5, colour='black', pch=21, alpha=0.75) +
-#       labs(x='Site', y='Mean net photon count') + 
-#       theme_bw() + 
-#       theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
-#             strip.text = element_text(size=14),
-#             panel.border = element_blank(),
-#             axis.line = element_line(color='black'))
-#   )
-#   dev.off()
-# }
+for (elem in unique(fieldXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
+  print(elem)
+  png(file.path(inspectdir, paste0('fieldXRF_withintree_',elem,'.png')), width = 20, height=12, units='in', res=300)
+  print(
+    ggplot(fieldt,
+           aes(x=paste0(SiteID, Pair), y = get(elem), fill=Pair)) +
+      geom_line(aes(group=paste0(SiteID, Pair)), color='black') +
+      geom_point(size=5, colour='black', pch=21, alpha=0.75) +
+      labs(x='Site', y='Mean net photon count') +
+      theme_bw() +
+      theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
+            strip.text = element_text(size=14),
+            panel.border = element_blank(),
+            axis.text.x = element_text(angle=90),
+            axis.line = element_line(color='black'))
+  )
+  dev.off()
+}
 
 # ---- 2. Assess within-site field variability ---- 
 #TO DO: CREATE RANDOM PALETTE
-field_artaxmeansite <- fieldt[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=29:51]
-artaxsdsite <- fieldt[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=29:51]
+field_artaxmeansite <- fieldt[,lapply(.SD, mean, na.rm=TRUE), by=c('SiteID'), .SDcols=31:59]
+artaxsdsite <- fieldt[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=31:59]
 fieldXRF_formatsite <- merge(melt(field_artaxmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
                              melt(artaxsdsite, id.vars='SiteID', variable.name='Elem', value.name='sd'),
                              by=c('SiteID','Elem')) %>%
@@ -937,30 +952,30 @@ ggplot(fieldXRF_formatsite[!(fieldXRF_formatsite$Elem %in% c('Rh','Pd','Ar')),],
         panel.border = element_blank(),
         axis.line = element_line(color='black'))
 
-for (elem in unique(fieldXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
-  print(elem)
-  png(file.path(inspectdir, paste0('fieldXRF_withinsite_',elem,'.png')), width = 20, height=12, units='in', res=300)
-  print(
-    ggplot(fieldXRF_format[Elem == elem,], 
-           aes(x=SiteID, y = mean, fill=SiteID)) + 
-      geom_line(aes(group=SiteID), color='black') +
-      geom_point(size=5, colour='black', pch=21, alpha=0.75) +
-      geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd, color=SiteID)) +
-      labs(x='Element', y='Mean net photon count') + 
-      theme_bw() + 
-      theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
-            strip.text = element_text(size=14),
-            panel.border = element_blank(),
-            axis.line = element_line(color='black'))
-  )
-  dev.off()
-}
+# for (elem in unique(fieldXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
+#   print(elem)
+#   png(file.path(inspectdir, paste0('fieldXRF_withinsite_',elem,'.png')), width = 20, height=12, units='in', res=300)
+#   print(
+#     ggplot(fieldXRF_format[Elem == elem,], 
+#            aes(x=SiteID, y = mean, fill=SiteID)) + 
+#       geom_line(aes(group=SiteID), color='black') +
+#       geom_point(size=5, colour='black', pch=21, alpha=0.75) +
+#       geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd, color=SiteID)) +
+#       labs(x='Element', y='Mean net photon count') + 
+#       theme_bw() + 
+#       theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
+#             strip.text = element_text(size=14),
+#             panel.border = element_blank(),
+#             axis.line = element_line(color='black'))
+#   )
+#   dev.off()
+# }
 
 # ---- 3. Exclude columns that have high within-tree variability or that are unrelated to traffic pollution ----
 fieldXRF_format[, `:=`(meanCV=mean(cv, na.rm=T),
                        sdCV = sd(cv, na.rm=T)), by=Elem]
 excol <- unique(c(fieldXRF_format[meanCV>0.5,unique(Elem)], 
-                  fieldXRF_format[!(Elem %in% union(brakelining_elem, tire_elem)),Elem],
+                  fieldXRF_format[!(fieldXRF_format$Elem %in% union(brakelining_elem, tire_elem)),Elem],
                   'Rh', 'Pd', 'Rb', 'Ag')) %>%
   setdiff('Zr') #Keep zirconium as appears to be correlated with traffic
 excol2 <- c('As', 'Cd', 'Mo', 'Na', 'Se', 'Si') #Exclude columns that are very far from being normally distributed (mostly 0s in ICP data)
@@ -1190,25 +1205,26 @@ ggplot(ICPmeanR2, aes(x=Energy.keV, y=R2)) +
   geom_smooth(span=1) + 
   theme_classic()
 
-ggplot(ICPmeanR2, aes(x=noise, y=R2)) + 
+ggplot(ICPmeanR2, aes(x=signalratio, y=R2)) + 
   geom_text(aes(label=Elem)) +
   scale_x_log10() + 
   geom_smooth(span=1) + 
   theme_classic()
 
 summary(loess(R2~meanXRF, data=ICPmeanR2, span=1))
-summary(loess(R2~meanXRF+noise, data=ICPmeanR2, span=1))
+summary(loess(R2~meanXRF+signalratio, data=ICPmeanR2, span=1))
 
 # ---- 11. Univariate relationship to lab XRF for the purpose of outlier detection ----
 #Outlier diagnostic plots
 labfieldmerge[, labfield_flags := 0]
+
 for (chem in unique(labfieldmerge$Elem)) {
   print(chem)
-  labfield_lm <- lm(lab_mean ~ field_mean, data = labfieldmerge[Elem == chem,])
+  labfield_lm <- lm(lab_mean ~ field_mean, data = labfieldmerge[Elem == chem & !is.na(lab_mean),])
   ggsave(file.path(inspectdir, paste0('fieldlab_regoutliers', chem, '.png')),
-         chemregdiagnostic_custom(labfield_lm, labfieldmerge, chem,  flagcol = 'labfield_flags', tresids = TRUE),
+         chemregdiagnostic_custom(labfield_lm, labfieldmerge[!is.na(lab_mean),], chem,  flagcol = 'labfield_flags', tresids = TRUE),
          width = 20, height=12, units='in', dpi=300)
-  labfieldmerge[Elem == chem, labfieldR2 := summary(labfield_lm)$adj.r.squared]
+  labfieldmerge[Elem == chem & !is.na(lab_mean), labfieldR2 := summary(labfield_lm)$adj.r.squared]
 }
 
 #Plot field XRF ~ lab data
@@ -1259,7 +1275,7 @@ ggplot(labmeanR2, aes(x=Energy.keV, y=R2)) +
   geom_smooth(span=1) + 
   theme_classic()
 
-ggplot(labmeanR2, aes(x=noise, y=R2)) + 
+ggplot(labmeanR2, aes(x=signalratio, y=R2)) + 
   geom_text(aes(label=Elem)) +
   scale_x_log10() + 
   geom_smooth(span=1) + 
@@ -1271,9 +1287,9 @@ pollutfieldmerge <- pollutfieldmerge[!is.na(Elem),]
 pollutfieldmerge[, pollutfield_flags := 0]
 for (chem in unique(pollutfieldmerge$Elem)) {
   print(chem)
-  pollutfield_lm <- lm(mean ~ heatbing1902log300*heatOSMAADTlog300*heatOSMgradientlog300*nlcd_imp_ps +
-                         heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog300, 
-                       data = pollutfieldmerge[Elem == chem,])
+  pollutfield_lm <- lm(mean ~ heat_binglog300*heatsubAADTlog300*heatsubslopelog300*nlcd_imp_ps +
+                         heatbustransitlog300 + heatbustransitlog300:heatsubslopelog300, 
+                       data = pollutfieldmerge[Elem == chem ,])
   ggsave(file.path(inspectdir, paste0('fieldpollution_regoutliers2', chem, '.png')),
          chemregdiagnostic_custom(pollutfield_lm, pollutfieldmerge, chem,  flagcol = 'pollutfield_flags', tresids = TRUE),
          width = 20, height=12, units='in', dpi=300)
@@ -1324,7 +1340,7 @@ ggplot(pollutmeanR2, aes(x=Energy.keV, y=R2)) +
   geom_smooth(span=1) + 
   theme_classic()
 
-ggplot(pollutmeanR2, aes(x=noise, y=R2)) + 
+ggplot(pollutmeanR2, aes(x=signalratio, y=R2)) + 
   geom_text(aes(label=Elem)) +
   scale_x_log10() + 
   geom_smooth(span=1) + 
@@ -1427,8 +1443,8 @@ for (elem in unique(labXRF_format[!(Elem %in% c('Rh','Pd','Ar')), Elem])) {
 
 
 # ---- 2. Assess within-site lab variability ---- 
-lab_artaxmeansite <- labdt[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=29:51]
-artaxsdsite <- labdt[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=29:51]
+lab_artaxmeansite <- labdt[,lapply(.SD,mean,na.rm=TRUE), by=c('SiteID'), .SDcols=30:52]
+artaxsdsite <- labdt[,lapply(.SD,sd,na.rm=TRUE), by=c('SiteID'), .SDcols=30:52]
 labXRF_formatsite <- merge(melt(lab_artaxmeansite, id.vars='SiteID', variable.name='Elem', value.name='mean'),
                            melt(artaxsdsite, id.vars='SiteID', variable.name='Elem', value.name='sd'),
                            by=c('SiteID','Elem')) %>%
@@ -1540,14 +1556,14 @@ ggplot(ICPmeanR2, aes(x=Energy.keV, y=R2)) +
   geom_smooth(span=1) + 
   theme_classic()
 
-ggplot(ICPmeanR2, aes(x=noise, y=R2)) + 
+ggplot(ICPmeanR2, aes(x=signalratio, y=R2)) + 
   geom_text(aes(label=Elem)) +
   scale_x_log10() + 
   geom_smooth(span=1) + 
   theme_classic()
 
 summary(loess(R2~meanXRF, data=ICPmeanR2, span=1))
-summary(loess(R2~meanXRF+noise, data=ICPmeanR2, span=1))
+summary(loess(R2~meanXRF+signalratio, data=ICPmeanR2, span=1))
 
 # ---- 5. Univariate relationship to pollution predictors for the purpose of outlier detection ----
 #Outlier diagnostic plots
@@ -1555,8 +1571,8 @@ pollutlabmerge[, pollutlab_flags := 0]
 pollutlabmerge <- pollutlabmerge[!is.na(Elem),]
 for (chem in unique(pollutlabmerge$Elem)) {
   print(chem)
-  pollutlab_lm <- lm(mean ~  heatbing1902log300*heatOSMAADTlog300*heatOSMgradientlog300*nlcd_imp_ps +
-                       heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog300, 
+  pollutlab_lm <- lm(mean ~  heatbing1902log300*heatsubAADTlog300*heatsubslopelog300*nlcd_imp_ps +
+                       heatbustransitlog300 + heatbustransitlog300:heatsubslopelog300, 
                      data = pollutlabmerge[Elem == chem,])
   ggsave(file.path(inspectdir, paste0('labpollution_regoutliers', chem, '.png')),
          chemregdiagnostic_custom(pollutlab_lm, pollutlabmerge, chem,  flagcol = 'pollutlab_flags', tresids = TRUE),
@@ -1606,12 +1622,11 @@ ggplot(pollutmeanR2, aes(x=Energy.keV, y=R2)) +
   geom_smooth(span=1) + 
   theme_classic()
 
-ggplot(pollutmeanR2, aes(x=noise, y=R2)) + 
+ggplot(pollutmeanR2, aes(x=signalratio, y=R2)) + 
   geom_text(aes(label=Elem)) +
   scale_x_log10() + 
   geom_smooth(span=1) + 
   theme_classic()
-
 
 
 ### ---- 6. Compile outlier flags ----
@@ -1727,8 +1742,8 @@ pollutICPmerge[, pollutICP_flags := 0]
 pollutICPmerge <- pollutICPmerge[!is.na(Elem),]
 for (chem in unique(pollutICPmerge[!is.na(Elem), Elem])) {
   print(chem)
-  pollutICP_lm <- lm(ICP ~  heatbing1902log300*heatOSMAADTlog300*heatOSMgradientlog300*nlcd_imp_ps +
-                       heatbustransitlog300 + heatbustransitlog300:heatOSMgradientlog300, 
+  pollutICP_lm <- lm(ICP ~  heatbing1902log300*heatsubAADTlog300*heatsubslopelog300*nlcd_imp_ps +
+                       heatbustransitlog300 + heatbustransitlog300:heatsubslopelog300, 
                      data = pollutICPmerge[Elem == chem,])
   ggsave(file.path(inspectdir, paste0('ICPpollution_regoutliers', chem, '.png')),
          chemregdiagnostic_custom(pollutICP_lm, pollutICPmerge, chem,  flagcol = 'pollutICP_flags', tresids = TRUE),
@@ -1864,9 +1879,25 @@ ggplot(data = allflags_melt[!(variable %in% c('field', 'lab', 'part'))],  #Re-ad
   theme(legend.position = c(0.9, 0.2),
         legend.background = element_blank(),
         axis.title = element_blank(),
-        axis.text.x = element_text(angle=45))
+        axis.text.x = element_text(angle=90, vjust=-0.07))
 
 # ---- 2. Analysis of the main outliers ----
+#112A: South Beacon Hill, forested area across from Boeing Field/I5 (closest to road)
+#     5 measurements on this tree. High within tree variability but no clear outlier point. 
+#     pollut-field outlier for Cr, Fe, Ti, Zn, Zr (model overestimates pollution; could be due to protection from surrounding trees and topo.)
+
+#111A: Interbay, Magnolia Bridge exit
+#     High within tree variability with one apparent XRF sample with much higher value than the two others
+#     pollut-field outlier for Cr, Fe, Ti, Zn (model underestimates pollution)
+
+#114A and 114B: 15th Ave NE & 43rd St, UW campus by bus stop
+#     Not abnormal within-tree variability for outlying elements, similar between 114A and 114B in both range and mean
+#     pollut-field outlier for Cu, Fe, Zn (model underestimates pollution, particularly for Cu)
+
+#117A and 117B: 1st Ave S, Southern end of bridge over Union Pacific cargo yard in Industrial District
+#     Normal within-tree variability
+#     pollut-field outlier for Cr, Fe, Zn, Zr (model underestimates pollution)
+
 #49A: on slope by intersection SW of Garfield School in Central District
 #     outlier for all lab things but not for field stuff. Must indicate that something was wrong with lab.
 #     no collection or analysis comments, moss appearance NTR, overestimated for both ICP and lab XRF.
@@ -2039,7 +2070,6 @@ pollutlabclean <- pollutlabmerge[!(paste0(SiteID, Pair) %in% c('53A', '49A')),]
 pollutICPclean <-  pollutICPmerge[!(paste0(SiteID, Pair) %in% c('49A')),]
 
 ############################################################################################################################################
-
 # 4. Check relationship among and reduce variables 
 ############################################################################################################################################
 #---- A. Field XRF - all elements against each other ----
@@ -2096,19 +2126,22 @@ pcabiplot_grid(pollutfieldclean_cast, nPCs = 5, cols = elemcols_sub,
 #Inspect components to decide which ones to predict
 loadings(pca)
 #There are no very distinct patterns - everything is pretty correlated:
-#First component: Zn, Zr, Ti, Ni, Fe, Cu, and Cr load equally (0.33-0.36);
-#                 Ca, K, and Pb a little less (0.20-25);
-#                 Sr, and Mn not much (0.11-0.12)
-#Second component:Ca, K, and Sr load the strongest (0.47-0.49)
+#First component: Zn, Zr, Ti, Fe, and Cr load equally (0.34-0.37);
+#                 Ca, Cu a little less (~0.30)
+#                 Ni, and Pb a little less (0.20-25);
+#                 Sr, Mn, K, Ba not much (0.13-0.16)
+#Second component:K loads the strongest (0.53)
+#                 Sr, Ni, Ca, Ba load moderately (0.30-0.37)
 #                 Pb and Mn load positively but not much (0.16)
-#                 Cu and Ni are ~ 0
-#                 Zn, Zr, Ti, Fe and Cr load negatively -0.11 to -0.30
+#                 Cu is ~ 0
+#                 Cr and Ti load moderately and negatively (~-0.15)
+#                 Zn, Zr, Fe load negatively < -20
 
-#Select individual elements to predict separately: Zn, Fe, Cu, Pb
+#Select individual elements to predict separately: Zn, Cu, Pb
 
 #---- B. Create a synthetic sum-based pollution index (averaging centered and standardized elements)   ----
 #Check that all can be transformed using the same transformation then transform
-selcols <- c('Cu', 'Fe', 'Pb', 'Zn')
+selcols <- c('Cu', 'Pb', 'Zn')
 selcols_trans <- data.trans(as.data.frame(pollutfieldclean_cast[, elemcols[elemcols %in% selcols], with=F]), 
                             method='power',exp=1/3, plot=F)
 cbcols <- paste0(elemcols[elemcols %in% selcols], 'cubrt')
@@ -2139,7 +2172,7 @@ as it picks up the common effect of increased road density on the indices.
 Within categories, indices are correlated > 0.90 with indices of 1 for pow1,2 and log.
 Across categories (for kernel > 50 m):
 gradient-AADT: 0.3-0.6; gradient_bing: 0.2-0.3; gradient-LU: 0.15-0.20; gradient-transit: 0.25-0.4; gradient-SPD:0.4-0.5
-AADT-bing: 0.45-0.75 depending on kernel correspondence; AADT-LU: 0.25-0.40; AADT-transit: 0.65-0.80; AADT-SPD:0.6-0.7 particularly for OSMAADT
+AADT-bing: 0.45-0.75 depending on kernel correspondence; AADT-LU: 0.25-0.40; AADT-transit: 0.65-0.80; AADT-SPD:0.6-0.7 particularly for subAADT
 bing-LU: 0.5, bing-transit: 0.45-0.60; bing-SPD: 0.5-0.60
 transit-LU: 0.35-0.45"
 
@@ -2167,8 +2200,8 @@ spidercols <-  colnames(cordf)[!(grepl('(^heatAADT.*)|(log[0-9]{2}$)|.*mean.*', 
                                  grepl('(.*log.*)|.*nlcd.*|group', colnames(cordf))]
 spiderlabels <- gsub('(heat_?)|log', '',
                      gsub('bing[1-9]*', 'Congestion ',
-                          gsub('OSMgradient', 'Gradient ',
-                               gsub('OSMAADT', 'Volume ',
+                          gsub('subslope', 'Gradient ',
+                               gsub('subAADT', 'Volume ',
                                     gsub('SPD', 'Speed ',
                                          gsub('bustransit', 'Transit ',
                                               gsub('nlcd_imp_ps.*', 'Imperv.',
@@ -2289,17 +2322,17 @@ dev.off()
 - nlcd_imp_ps (not filtered)
 - heatbustransitlog200 (slightly better than log300 across elements but varies, 
                         equal for pollution index; Pb best for log300)
-- heatOSMAADTlog50 (better than log100 by far for Co, Cr, Fe, 
+- heatsubAADTlog50 (better than log100 by far for Co, Cr, Fe, 
                     log500 best for Pb, 
                     log100 slightly better for Zn and pollution index)
-- heatOSMgradientlog300 (better for all elements)
+- heatsubslopelog300 (better for all elements)
 - heatSPDlog300 (better for almost all elements)
 
 Overall Pb is best predicted by largest kernels.
 "
 #---- E. Selected pollution drivers against selected field XRF all elems ----
 selcols <- c(selcols, 'heatbing1902log300', 'nlcd_imp_ps', 'heatbustransitlog300',
-             'heatOSMAADTlog50', 'heatOSMgradientlog300', 'heatSPDlog300')
+             'heatsubAADTlog50', 'heatsubslopelog300', 'heatSPDlog300')
 
 png(file.path(inspectdir, 'cormatrix_SelFieldElem_SelPollutionDrivers.png'), 
     width = 12, height=12, units='in', res=300)
@@ -2325,7 +2358,7 @@ modlistA <- list() #List to hold models
 modlistA[[1]] <- lm(pollution_index ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
 
 #------ 1. Single parameter models --------
-modlistA[[2]] <- lm(pollution_index ~ heatOSMAADTlog300, data = pollutfieldclean_cast)
+modlistA[[2]] <- lm(pollution_index ~ heatsubAADTlog300, data = pollutfieldclean_cast)
 ols_regress(modlistA[[2]])
 #ols_plot_diagnostics(modlistA[[2]])
 
@@ -2345,11 +2378,11 @@ modlistA[[6]] <- lm(pollution_index ~ heatSPDlog300, data = pollutfieldclean_cas
 ols_regress(modlistA[[6]])
 #ols_plot_diagnostics(modlistA[[6]])
 
-modlistA[[7]] <- lm(pollution_index ~ heatOSMgradientlog300, data = pollutfieldclean_cast)
+modlistA[[7]] <- lm(pollution_index ~ heatsubslopelog300, data = pollutfieldclean_cast)
 ols_regress(modlistA[[7]])
 #ols_plot_diagnostics(modlistA[[8]])
 
-modlistA[[8]] <- lm(pollution_index ~ heatOSMAADTlog50, data = pollutfieldclean_cast)
+modlistA[[8]] <- lm(pollution_index ~ heatsubAADTlog50, data = pollutfieldclean_cast)
 ols_regress(modlistA[[8]])
 #ols_plot_diagnostics(modlistA[[2]])
 
@@ -2386,31 +2419,31 @@ ols_regress(modlistA[[45]])
 ols_coll_diag(modlistA[[45]])
 ols_correlations(modlistA[[45]])
 
-modlistA[[12]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + heatOSMAADTlog300, 
+modlistA[[12]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + heatsubAADTlog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[12]])
 #ols_plot_diagnostics(modlistA[[12]])
 ols_coll_diag(modlistA[[12]])
 ols_correlations(modlistA[[12]])
 
-modlistA[[13]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300*heatOSMAADTlog300, 
+modlistA[[13]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300*heatsubAADTlog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[13]])
 #ols_plot_diagnostics(modlistA[[13]])
 ols_coll_diag(modlistA[[13]])
 ols_correlations(modlistA[[13]])
-plot_model(modlistA[[13]], type='pred', terms = c('heatbing1902log300', 'heatOSMAADTlog100'))
+plot_model(modlistA[[13]], type='pred', terms = c('heatbing1902log300', 'heatsubAADTlog100'))
 
 
 modlistA[[14]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatOSMAADTlog300 + heatSPDlog300, 
+                       heatsubAADTlog300 + heatSPDlog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[14]])
 #ols_plot_diagnostics(modlistA[[14]])
 ols_coll_diag(modlistA[[14]])
 ols_correlations(modlistA[[14]])
 
-modlistA[[15]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300*heatOSMgradientlog300 + 
+modlistA[[15]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300*heatsubslopelog300 + 
                        heatSPDlog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[15]])
@@ -2419,7 +2452,7 @@ ols_coll_diag(modlistA[[15]])
 ols_correlations(modlistA[[15]])
 
 modlistA[[16]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatSPDlog300*heatOSMgradientlog300, 
+                       heatSPDlog300*heatsubslopelog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[16]])
 #ols_plot_diagnostics(modlistA[[16]])
@@ -2427,7 +2460,7 @@ ols_coll_diag(modlistA[[16]])
 ols_correlations(modlistA[[16]])
 
 modlistA[[39]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatSPDlog100*heatOSMgradientlog300, 
+                       heatSPDlog100*heatsubslopelog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[39]])
 #ols_plot_diagnostics(modlistA[[16]])
@@ -2435,7 +2468,7 @@ ols_coll_diag(modlistA[[39]])
 ols_correlations(modlistA[[39]])
 
 modlistA[[40]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatOSMAADTlog50*heatOSMgradientlog300, 
+                       heatsubAADTlog50*heatsubslopelog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[40]])
 #ols_plot_diagnostics(modlistA[[16]])
@@ -2443,7 +2476,7 @@ ols_coll_diag(modlistA[[40]])
 ols_correlations(modlistA[[40]])
 
 modlistA[[17]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatSPDlog300*heatOSMgradientlog300 + nlcd_imp_ps, 
+                       heatSPDlog300*heatsubslopelog300 + nlcd_imp_ps, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[17]])
 #ols_plot_diagnostics(modlistA[[17]])
@@ -2451,7 +2484,7 @@ ols_coll_diag(modlistA[[17]])
 ols_correlations(modlistA[[17]])
 
 modlistA[[18]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatSPDlog300*heatOSMgradientlog300 + nlcd_imp_ps:heatSPDlog300, 
+                       heatSPDlog300*heatsubslopelog300 + nlcd_imp_ps:heatSPDlog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[18]])
 #ols_plot_diagnostics(modlistA[[18]])
@@ -2459,7 +2492,7 @@ ols_coll_diag(modlistA[18])
 ols_correlations(modlistA[[18]])
 
 modlistA[[19]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300*nlcd_imp_ps + 
-                       heatSPDlog300*heatOSMgradientlog300, 
+                       heatSPDlog300*heatsubslopelog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[19]])
 #ols_plot_diagnostics(modlistA[[19]])
@@ -2481,7 +2514,7 @@ ols_regress(modlistA[[43]])
 ols_coll_diag(modlistA[[43]])
 ols_correlations(modlistA[[43]])
 
-modlistA[[44]] <- lm(pollution_index ~ heatbustransitlog300 + heatOSMAADTlog50 + nlcd_imp_ps, 
+modlistA[[44]] <- lm(pollution_index ~ heatbustransitlog300 + heatsubAADTlog50 + nlcd_imp_ps, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[44]])
 #ols_plot_diagnostics(modlistA[[20]])
@@ -2496,7 +2529,7 @@ ols_regress(modlistA[[46]])
 ols_coll_diag(modlistA[[46]])
 ols_correlations(modlistA[[46]])
 
-modlistA[[47]] <- lm(pollution_index ~ heatbustransitlog300*heatOSMAADTlog50 + nlcd_imp_ps, 
+modlistA[[47]] <- lm(pollution_index ~ heatbustransitlog300*heatsubAADTlog50 + nlcd_imp_ps, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[47]])
 #ols_plot_diagnostics(modlistA[[47]])
@@ -2512,14 +2545,14 @@ ols_regress(modlistA[[38]])
 ols_coll_diag(modlistA[38])
 ols_correlations(modlistA[[38]])
 
-modlistA[[33]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + heatOSMAADTlog50, 
+modlistA[[33]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + heatsubAADTlog50, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[33]])
 #ols_plot_diagnostics(modlistA[[32]])
 ols_coll_diag(modlistA[[33]])
 ols_correlations(modlistA[[33]])
 
-modlistA[[42]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + heatOSMAADTlog100, 
+modlistA[[42]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300 + heatsubAADTlog100, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[42]])
 #ols_plot_diagnostics(modlistA[[32]])
@@ -2532,9 +2565,9 @@ ols_regress(modlistA[[34]])
 #ols_plot_diagnostics(modlistA[[32]])
 ols_coll_diag(modlistA[[34]])
 ols_correlations(modlistA[[34]])
-#plot_model(modlistA[[32]], type='pred', terms = c('heatbing1902log300', 'heatOSMAADTlog50'))
+#plot_model(modlistA[[32]], type='pred', terms = c('heatbing1902log300', 'heatsubAADTlog50'))
 
-modlistA[[48]] <- lm(pollution_index ~ heatbustransitlog300 + heatOSMAADTlog50 + heatbing1902log300 + 
+modlistA[[48]] <- lm(pollution_index ~ heatbustransitlog300 + heatsubAADTlog50 + heatbing1902log300 + 
                        nlcd_imp_ps, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[48]])
@@ -2544,14 +2577,14 @@ ols_correlations(modlistA[[48]])
 
 
 ####################### Build models without bus transit
-modlistA[[21]] <- lm(pollution_index ~ heatOSMAADTlog300 + heatbing1902log300 + heatSPDlog300,
+modlistA[[21]] <- lm(pollution_index ~ heatsubAADTlog300 + heatbing1902log300 + heatSPDlog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[21]])
 #ols_plot_diagnostics(modlistA[[21]])
 ols_coll_diag(modlistA[[21]])
 ols_correlations(modlistA[[21]])
 
-modlistA[[22]] <- lm(pollution_index ~ heatOSMAADTlog300*heatbing1902log300,
+modlistA[[22]] <- lm(pollution_index ~ heatsubAADTlog300*heatbing1902log300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[22]])
 #ols_plot_diagnostics(modlistA[[22]])
@@ -2565,28 +2598,28 @@ ols_regress(modlistA[[23]])
 ols_coll_diag(modlistA[[23]])
 ols_correlations(modlistA[[23]])
 
-modlistA[[24]] <- lm(pollution_index ~ heatOSMAADTlog300*heatbing1902log300 + heatSPDlog300,
+modlistA[[24]] <- lm(pollution_index ~ heatsubAADTlog300*heatbing1902log300 + heatSPDlog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[24]])
 #ols_plot_diagnostics(modlistA[[24]])
 ols_coll_diag(modlistA[[24]])
 ols_correlations(modlistA[[24]])
 
-modlistA[[41]] <- lm(pollution_index ~ heatOSMAADTlog50*heatbing1902log300 + heatSPDlog100,
+modlistA[[41]] <- lm(pollution_index ~ heatsubAADTlog50*heatbing1902log300 + heatSPDlog100,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[41]])
 #ols_plot_diagnostics(modlistA[[24]])
 ols_coll_diag(modlistA[[41]])
 ols_correlations(modlistA[[41]])
 
-modlistA[[25]] <- lm(pollution_index ~ heatOSMAADTlog300*heatbing1902log300*heatSPDlog300,
+modlistA[[25]] <- lm(pollution_index ~ heatsubAADTlog300*heatbing1902log300*heatSPDlog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[25]])
 #ols_plot_diagnostics(modlistA[[25]])
 ols_coll_diag(modlistA[[25]])
 ols_correlations(modlistA[[25]])
 
-modlistA[[37]] <- lm(pollution_index ~ heatOSMAADTlog50*heatbing1902log300*heatSPDlog100,
+modlistA[[37]] <- lm(pollution_index ~ heatsubAADTlog50*heatbing1902log300*heatSPDlog100,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[37]])
 #ols_plot_diagnostics(modlistA[[25]])
@@ -2594,14 +2627,14 @@ ols_coll_diag(modlistA[[37]])
 ols_correlations(modlistA[[37]])
 
 
-modlistA[[26]] <- lm(pollution_index ~ heatOSMAADTlog300 + heatbing1902log300*heatOSMgradientlog300,
+modlistA[[26]] <- lm(pollution_index ~ heatsubAADTlog300 + heatbing1902log300*heatsubslopelog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[26]])
 #ols_plot_diagnostics(modlistA[[26]])
 ols_coll_diag(modlistA[[26]])
 ols_correlations(modlistA[[26]])
 
-modlistA[[36]] <- lm(pollution_index ~ heatOSMAADTlog50 + heatbing1902log300*heatOSMgradientlog300,
+modlistA[[36]] <- lm(pollution_index ~ heatsubAADTlog50 + heatbing1902log300*heatsubslopelog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[36]])
 #ols_plot_diagnostics(modlistA[[26]])
@@ -2609,14 +2642,14 @@ ols_coll_diag(modlistA[[36]])
 ols_correlations(modlistA[[36]])
 
 
-modlistA[[27]] <- lm(pollution_index ~ heatOSMAADTlog300 + heatbing1902log300 + nlcd_imp_ps,
+modlistA[[27]] <- lm(pollution_index ~ heatsubAADTlog300 + heatbing1902log300 + nlcd_imp_ps,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[27]])
 #ols_plot_diagnostics(modlistA[[27]])
 ols_coll_diag(modlistA[[27]])
 ols_correlations(modlistA[[27]])
 
-modlistA[[35]] <- lm(pollution_index ~ heatOSMAADTlog50 + heatbing1902log300 + nlcd_imp_ps,
+modlistA[[35]] <- lm(pollution_index ~ heatsubAADTlog50 + heatbing1902log300 + nlcd_imp_ps,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[35]])
 #ols_plot_diagnostics(modlistA[[35]])
@@ -2630,16 +2663,16 @@ ols_regress(modlistA[[45]])
 ols_coll_diag(modlistA[[45]])
 ols_correlations(modlistA[[45]])
 
-modlistA[[32]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300*heatOSMAADTlog50, 
+modlistA[[32]] <- lm(pollution_index ~ heatbustransitlog300 + heatbing1902log300*heatsubAADTlog50, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[32]])
 #ols_plot_diagnostics(modlistA[[32]])
 ols_coll_diag(modlistA[[32]])
 ols_correlations(modlistA[[32]])
-#plot_model(modlistA[[32]], type='pred', terms = c('heatbing1902log300', 'heatOSMAADTlog50'))
+#plot_model(modlistA[[32]], type='pred', terms = c('heatbing1902log300', 'heatsubAADTlog50'))
 
 #Build models without congestion
-modlistA[[28]] <- lm(pollution_index ~  heatbustransitlog300 + heatOSMAADTlog300,
+modlistA[[28]] <- lm(pollution_index ~  heatbustransitlog300 + heatsubAADTlog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[28]])
 #ols_plot_diagnostics(modlistA[[28]])
@@ -2653,14 +2686,14 @@ ols_regress(modlistA[[29]])
 ols_coll_diag(modlistA[[29]])
 ols_correlations(modlistA[[29]])
 
-modlistA[[30]] <- lm(pollution_index ~  heatbustransitlog300 + heatSPDlog300*heatOSMgradientlog300,
+modlistA[[30]] <- lm(pollution_index ~  heatbustransitlog300 + heatSPDlog300*heatsubslopelog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[30]])
 #ols_plot_diagnostics(modlistA[[30]])
 ols_coll_diag(modlistA[[30]])
 ols_correlations(modlistA[[30]])
 
-modlistA[[31]] <- lm(pollution_index ~  heatbustransitlog300 + heatSPDlog300*heatOSMgradientlog300 +
+modlistA[[31]] <- lm(pollution_index ~  heatbustransitlog300 + heatSPDlog300*heatsubslopelog300 +
                        nlcd_imp_ps,
                      data = pollutfieldclean_cast)
 ols_regress(modlistA[[31]])
@@ -2717,7 +2750,7 @@ mod48_nooutliers <- regdiagnostic_customtab(modlistA[[48]], maxpar=vnum,
                                             kCV = TRUE, k=10, cvreps=50)
 subdat <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
                                   strsplit(gsub('\\\\', '', mod48_nooutliers['outliers']), ',')$outliers),]
-mod48_nooutliersub <- lm(pollution_index ~ heatbustransitlog300 + heatOSMAADTlog50 + heat_binglog300 + 
+mod48_nooutliersub <- lm(pollution_index ~ heatbustransitlog300 + heatsubAADTlog50 + heat_binglog300 + 
                            nlcd_imp_ps, 
                           data = subdat)
 ols_regress(mod48_nooutliersub)
@@ -2731,7 +2764,7 @@ qplot(subdat$heatbing1902log300, mod48_nooutliersub$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 qplot(subdat$nlcd_imp_ps, mod48_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$heatOSMAADTlog50, mod48_nooutliersub$residuals) + 
+qplot(subdat$heatsubAADTlog50, mod48_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
 ggplot(pollutfieldclean_cast, aes(y=predict(mod43_nooutliersub, pollutfieldclean_cast), 
@@ -2749,7 +2782,7 @@ sense that the OLS coefficient standard error estimates are biased, but the
 coefficient estimates themselves remain unbiased. However, to the extent that
 the spatially correlated errors mask an omitted variable, the consequences of
 ignoring this may be more serious."
-#---- For model 48 with all data: pollution_index ~ heatbustransitlog300 + heatbing1902log300 + heatOSMAADTlog50 + nlcd_imp_ps -----
+#---- For model 48 with all data: pollution_index ~ heatbustransitlog300 + heatbing1902log300 + heatsubAADTlog50 + nlcd_imp_ps -----
 resnorm <- rstandard(modlistA[[48]]) #Get standardized residuals from model
 #Make bubble map of residuals
 bubbledat <- data.frame(resnorm, pollutfieldclean_cast$coords.x1, pollutfieldclean_cast$coords.x2)
@@ -2934,7 +2967,7 @@ subdat[, sum(abs(rank(pollution_index_mod48pred)-rank(pollution_index)))/(.N^2)]
 modlistZn <- list() #List to hold models
 modlistZn[[1]] <- lm(Zn ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
 #------ 1. Zn - Single parameter models --------
-modlistZn[[2]] <- lm(Zn ~ heatOSMAADTlog100, data = pollutfieldclean_cast)
+modlistZn[[2]] <- lm(Zn ~ heatsubAADTlog100, data = pollutfieldclean_cast)
 ols_regress(modlistZn[[2]])
 #ols_plot_diagnostics(modlistZn[[2]])
 
@@ -2965,7 +2998,7 @@ ggplot(pollutfieldclean_cast, aes(x=heatSPDlog300)) +
 ols_regress(modlistZn[[7]])
 #ols_plot_diagnostics(modlistZn[[7]])
 
-modlistZn[[8]] <- lm(Zn ~ heatOSMgradientlog300, data = pollutfieldclean_cast)
+modlistZn[[8]] <- lm(Zn ~ heatsubslopelog300, data = pollutfieldclean_cast)
 ols_regress(modlistZn[[8]])
 #ols_plot_diagnostics(modlistZn[[8]])
 
@@ -2997,31 +3030,31 @@ ols_correlations(modlistZn[[11]])
 
 
 modlistZn[[12]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatOSMAADTlog300, 
+                       heatsubAADTlog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[12]])
 #ols_plot_diagnostics(modlistZn[[12]])
 ols_coll_diag(modlistZn[[12]])
 ols_correlations(modlistZn[[12]])
 
-modlistZn[[13]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300*heatOSMAADTlog100, 
+modlistZn[[13]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300*heatsubAADTlog100, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[13]])
 #ols_plot_diagnostics(modlistZn[[13]])
 ols_coll_diag(modlistZn[[13]])
 ols_correlations(modlistZn[[13]])
-plot_model(modlistZn[[13]], type='pred', terms = c('heatbing1902log300', 'heatOSMAADTlog100'))
+plot_model(modlistZn[[13]], type='pred', terms = c('heatbing1902log300', 'heatsubAADTlog100'))
 
 
 modlistZn[[14]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatOSMAADTlog100 + heatSPDlog300, 
+                       heatsubAADTlog100 + heatSPDlog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[14]])
 #ols_plot_diagnostics(modlistZn[[14]])
 ols_coll_diag(modlistZn[[14]])
 ols_correlations(modlistZn[[14]])
 
-modlistZn[[15]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300*heatOSMgradientlog300 + 
+modlistZn[[15]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300*heatsubslopelog300 + 
                        heatSPDlog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[15]])
@@ -3030,7 +3063,7 @@ ols_coll_diag(modlistZn[[15]])
 ols_correlations(modlistZn[[15]])
 
 modlistZn[[16]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatSPDlog300*heatOSMgradientlog300, 
+                       heatSPDlog300*heatsubslopelog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[16]])
 #ols_plot_diagnostics(modlistZn[[16]])
@@ -3038,7 +3071,7 @@ ols_coll_diag(modlistZn[[16]])
 ols_correlations(modlistZn[[16]])
 
 modlistZn[[17]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatSPDlog300*heatOSMgradientlog300 + nlcd_imp_ps, 
+                       heatSPDlog300*heatsubslopelog300 + nlcd_imp_ps, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[17]])
 #ols_plot_diagnostics(modlistZn[[17]])
@@ -3046,7 +3079,7 @@ ols_coll_diag(modlistZn[[17]])
 ols_correlations(modlistZn[[17]])
 
 modlistZn[[18]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                       heatSPDlog300*heatOSMgradientlog300 + nlcd_imp_ps:heatSPDlog300, 
+                       heatSPDlog300*heatsubslopelog300 + nlcd_imp_ps:heatSPDlog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[18]])
 ols_plot_diagnostics(modlistZn[[18]])
@@ -3054,7 +3087,7 @@ ols_coll_diag(modlistZn[18])
 ols_correlations(modlistZn[[18]])
 
 modlistZn[[19]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300*nlcd_imp_ps + 
-                       heatSPDlog300*heatOSMgradientlog300, 
+                       heatSPDlog300*heatsubslopelog300, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[19]])
 #ols_plot_diagnostics(modlistZn[[19]])
@@ -3070,7 +3103,7 @@ ols_coll_diag(modlistZn[20])
 ols_correlations(modlistZn[[20]])
 
 modlistZn[[32]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                        heatOSMAADTlog100 + nlcd_imp_ps, 
+                        heatsubAADTlog100 + nlcd_imp_ps, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[32]])
 ols_plot_diagnostics(modlistZn[[32]])
@@ -3078,7 +3111,7 @@ ols_coll_diag(modlistZn[32])
 ols_correlations(modlistZn[[32]])
 
 modlistZn[[33]] <- lm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                        heatOSMAADTlog300 + nlcd_imp_ps, 
+                        heatsubAADTlog300 + nlcd_imp_ps, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[33]])
 #ols_plot_diagnostics(modlistZn[[33]])
@@ -3086,14 +3119,14 @@ ols_coll_diag(modlistZn[33])
 ols_correlations(modlistZn[[33]])
 
 #Build models without bus transit
-modlistZn[[21]] <- lm(Zn ~ heatOSMAADTlog100 + heatbing1902log300 + heatSPDlog300,
+modlistZn[[21]] <- lm(Zn ~ heatsubAADTlog100 + heatbing1902log300 + heatSPDlog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[21]])
 #ols_plot_diagnostics(modlistZn[[21]])
 ols_coll_diag(modlistZn[[21]])
 ols_correlations(modlistZn[[21]])
 
-modlistZn[[22]] <- lm(Zn ~ heatOSMAADTlog100*heatbing1902log300,
+modlistZn[[22]] <- lm(Zn ~ heatsubAADTlog100*heatbing1902log300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[22]])
 #ols_plot_diagnostics(modlistZn[[22]])
@@ -3107,14 +3140,14 @@ ols_regress(modlistZn[[23]])
 ols_coll_diag(modlistZn[[23]])
 ols_correlations(modlistZn[[23]])
 
-modlistZn[[24]] <- lm(Zn ~ heatOSMAADTlog100*heatbing1902log300 + heatSPDlog300,
+modlistZn[[24]] <- lm(Zn ~ heatsubAADTlog100*heatbing1902log300 + heatSPDlog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[24]])
 #ols_plot_diagnostics(modlistZn[[24]])
 ols_coll_diag(modlistZn[[24]])
 ols_correlations(modlistZn[[24]])
 
-modlistZn[[25]] <- lm(Zn ~ heatOSMAADTlog100*heatbing1902log300*heatSPDlog300,
+modlistZn[[25]] <- lm(Zn ~ heatsubAADTlog100*heatbing1902log300*heatSPDlog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[25]])
 #ols_plot_diagnostics(modlistZn[[25]])
@@ -3122,14 +3155,14 @@ ols_coll_diag(modlistZn[[25]])
 ols_correlations(modlistZn[[25]])
 
 
-modlistZn[[26]] <- lm(Zn ~ heatOSMAADTlog100 + heatbing1902log300*heatOSMgradientlog300,
+modlistZn[[26]] <- lm(Zn ~ heatsubAADTlog100 + heatbing1902log300*heatsubslopelog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[26]])
 #ols_plot_diagnostics(modlistZn[[26]])
 ols_coll_diag(modlistZn[[26]])
 ols_correlations(modlistZn[[26]])
 
-modlistZn[[27]] <- lm(Zn ~ heatOSMAADTlog100 + heatbing1902log300 + nlcd_imp_ps,
+modlistZn[[27]] <- lm(Zn ~ heatsubAADTlog100 + heatbing1902log300 + nlcd_imp_ps,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[27]])
 #ols_plot_diagnostics(modlistZn[[27]])
@@ -3137,7 +3170,7 @@ ols_coll_diag(modlistZn[[27]])
 ols_correlations(modlistZn[[27]])
 
 #Build models without congestion
-modlistZn[[28]] <- lm(Zn ~  heatbustransitlog300 + heatOSMAADTlog100,
+modlistZn[[28]] <- lm(Zn ~  heatbustransitlog300 + heatsubAADTlog100,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[28]])
 #ols_plot_diagnostics(modlistZn[[28]])
@@ -3151,14 +3184,14 @@ ols_regress(modlistZn[[29]])
 ols_coll_diag(modlistZn[[29]])
 ols_correlations(modlistZn[[29]])
 
-modlistZn[[30]] <- lm(Zn ~  heatbustransitlog300 + heatSPDlog300*heatOSMgradientlog300,
+modlistZn[[30]] <- lm(Zn ~  heatbustransitlog300 + heatSPDlog300*heatsubslopelog300,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[30]])
 #ols_plot_diagnostics(modlistZn[[30]])
 ols_coll_diag(modlistZn[[30]])
 ols_correlations(modlistZn[[30]])
 
-modlistZn[[31]] <- lm(Zn ~  heatbustransitlog300 + heatSPDlog300*heatOSMgradientlog300 +
+modlistZn[[31]] <- lm(Zn ~  heatbustransitlog300 + heatSPDlog300*heatsubslopelog300 +
                        nlcd_imp_ps,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[31]])
@@ -3189,7 +3222,7 @@ modlistlogZn <- list() #List to hold models
 modlistlogZn[[1]] <- lm(logZn ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
 
 #------ 5. log(Zn) - Single parameter models --------
-modlistlogZn[[2]] <- lm(logZn ~ heatOSMAADTlog100, data = pollutfieldclean_cast)
+modlistlogZn[[2]] <- lm(logZn ~ heatsubAADTlog100, data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[2]])
 #ols_plot_diagnostics(modlistlogZn[[2]])
 
@@ -3220,15 +3253,15 @@ ggplot(pollutfieldclean_cast, aes(x=heatSPDlog300)) +
 ols_regress(modlistlogZn[[7]])
 #ols_plot_diagnostics(modlistlogZn[[7]])
 
-modlistlogZn[[8]] <- lm(logZn ~ heatOSMgradientlog300, data = pollutfieldclean_cast)
+modlistlogZn[[8]] <- lm(logZn ~ heatsubslopelog300, data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[8]])
 #ols_plot_diagnostics(modlistlogZn[[8]])
 
-modlistlogZn[[23]] <- lm(logZn ~ heatOSMAADTlog100 + I(heatOSMAADTlog100^2), data = pollutfieldclean_cast)
+modlistlogZn[[23]] <- lm(logZn ~ heatsubAADTlog100 + I(heatsubAADTlog100^2), data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[23]])
 #ols_plot_diagnostics(modlistlogZn[[23]])
 predf <- cbind(pollutfieldclean_cast, predict(modlistlogZn[[23]], interval = 'confidence'))
-ggplot(pollutfieldclean_cast, aes(x=heatOSMAADTlog100)) +
+ggplot(pollutfieldclean_cast, aes(x=heatsubAADTlog100)) +
   geom_ribbon(data = predf, aes(ymin=lwr, ymax=upr), fill='orange') +
   geom_point(aes(y=logZn)) +
   geom_line(data = predf,aes(y=fit)) +
@@ -3278,28 +3311,28 @@ ols_regress(modlistlogZn[[13]])
 ols_coll_diag(modlistlogZn[[13]])
 ols_correlations(modlistlogZn[[13]])
 
-modlistlogZn[[24]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + heatOSMAADTlog100 + I(heatOSMAADTlog100^2), 
+modlistlogZn[[24]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + heatsubAADTlog100 + I(heatsubAADTlog100^2), 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[24]])
 #ols_plot_diagnostics(modlistlogZn[[12]])
 ols_coll_diag(modlistlogZn[[24]])
 ols_correlations(modlistlogZn[[24]])
 
-modlistlogZn[[28]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + heatSPDlog300*heatOSMgradientlog300, 
+modlistlogZn[[28]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + heatSPDlog300*heatsubslopelog300, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[28]])
 #ols_plot_diagnostics(modlistlogZn[[28]])
 ols_coll_diag(modlistlogZn[[28]])
 ols_correlations(modlistlogZn[[28]])
 
-modlistlogZn[[29]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + heatSPDlog300*heatOSMgradientlog300 + I(heatSPDlog300^2), 
+modlistlogZn[[29]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + heatSPDlog300*heatsubslopelog300 + I(heatSPDlog300^2), 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[29]])
 #ols_plot_diagnostics(modlistlogZn[[29]])
 ols_coll_diag(modlistlogZn[[29]])
 ols_correlations(modlistlogZn[[29]])
 
-modlistlogZn[[30]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + heatSPDlog300*heatOSMAADTlog100, 
+modlistlogZn[[30]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + heatSPDlog300*heatsubAADTlog100, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[30]])
 #ols_plot_diagnostics(modlistlogZn[[30]])
@@ -3307,15 +3340,15 @@ ols_coll_diag(modlistlogZn[[30]])
 ols_correlations(modlistlogZn[[30]])
 
 
-modlistlogZn[[31]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatOSMAADTlog100, 
+modlistlogZn[[31]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatsubAADTlog100, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[31]])
 #ols_plot_diagnostics(modlistlogZn[[31]])
 ols_coll_diag(modlistlogZn[[31]])
 ols_correlations(modlistlogZn[[31]])
-plot_model(modlistlogZn[[31]], type='pred', terms = c('heatOSMAADTlog100', 'heatSPDlog300'))
+plot_model(modlistlogZn[[31]], type='pred', terms = c('heatsubAADTlog100', 'heatSPDlog300'))
 
-modlistlogZn[[36]] <- lm(logZn ~ heatbustransitlog300 + heatOSMAADTlog100 + heatSPDlog300 +
+modlistlogZn[[36]] <- lm(logZn ~ heatbustransitlog300 + heatsubAADTlog100 + heatSPDlog300 +
                            I(heatSPDlog300^2), 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[36]])
@@ -3324,7 +3357,7 @@ summary(modlistlogZn[[36]])
 ols_coll_diag(modlistlogZn[[36]])
 ols_correlations(modlistlogZn[[36]])
 
-modlistlogZn[[37]] <- lm(logZn ~ heatbustransitlog300 + heatOSMAADTlog100*heatSPDlog300 +
+modlistlogZn[[37]] <- lm(logZn ~ heatbustransitlog300 + heatsubAADTlog100*heatSPDlog300 +
                            I(heatSPDlog300^2), 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[37]])
@@ -3332,23 +3365,23 @@ summary(modlistlogZn[[37]])
 #ols_plot_diagnostics(modlistlogZn[[37]])
 ols_coll_diag(modlistlogZn[[37]])
 ols_correlations(modlistlogZn[[37]])
-plot_model(modlistlogZn[[37]], type='pred', terms =c('heatSPDlog300', 'heatOSMAADTlog100'))
+plot_model(modlistlogZn[[37]], type='pred', terms =c('heatSPDlog300', 'heatsubAADTlog100'))
 
-modlistlogZn[[38]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300 + heatOSMAADTlog100 + nlcd_imp_ps, 
+modlistlogZn[[38]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300 + heatsubAADTlog100 + nlcd_imp_ps, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[38]])
 #ols_plot_diagnostics(modlistlogZn[[38]])
 ols_coll_diag(modlistlogZn[[38]])
 ols_correlations(modlistlogZn[[38]])
 
-modlistlogZn[[32]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatOSMAADTlog100 + nlcd_imp_ps, 
+modlistlogZn[[32]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatsubAADTlog100 + nlcd_imp_ps, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[32]])
 #ols_plot_diagnostics(modlistlogZn[[32]])
 ols_coll_diag(modlistlogZn[[32]])
 ols_correlations(modlistlogZn[[32]])
 
-modlistlogZn[[33]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatOSMAADTlog100 + heatOSMgradientlog300, 
+modlistlogZn[[33]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatsubAADTlog100 + heatsubslopelog300, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[33]])
 #ols_plot_diagnostics(modlistlogZn[[33]])
@@ -3356,42 +3389,42 @@ ols_coll_diag(modlistlogZn[[33]])
 ols_correlations(modlistlogZn[[33]])
 
 
-modlistlogZn[[34]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatOSMAADTlog100 + 
-                           heatOSMgradientlog300 + heatOSMgradientlog300*heatSPDlog300, 
+modlistlogZn[[34]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatsubAADTlog100 + 
+                           heatsubslopelog300 + heatsubslopelog300*heatSPDlog300, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[34]])
 #ols_plot_diagnostics(modlistlogZn[[34]])
 ols_coll_diag(modlistlogZn[[34]])
 ols_correlations(modlistlogZn[[34]])
 
-modlistlogZn[[35]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatOSMAADTlog100*heatOSMgradientlog300, 
+modlistlogZn[[35]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatsubAADTlog100*heatsubslopelog300, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[35]])
 #ols_plot_diagnostics(modlistlogZn[[35]])
 ols_coll_diag(modlistlogZn[[35]])
 ols_correlations(modlistlogZn[[35]])
-# plot_model(modlistlogZn[[35]], type='pred', terms = c('heatOSMAADTlog100', 'heatSPDlog300'))
-# plot_model(modlistlogZn[[35]], type='pred', terms = c('heatOSMAADTlog100', 'heatSPDlog300', 'heatOSMgradientlog300'))
-# plot_model(modlistlogZn[[35]], type='pred', terms = c('heatOSMAADTlog100', 'heatOSMgradientlog300'))
-# plot_model(modlistlogZn[[35]], type='pred', terms = c('heatSPDlog300', 'heatOSMgradientlog300'))
+# plot_model(modlistlogZn[[35]], type='pred', terms = c('heatsubAADTlog100', 'heatSPDlog300'))
+# plot_model(modlistlogZn[[35]], type='pred', terms = c('heatsubAADTlog100', 'heatSPDlog300', 'heatsubslopelog300'))
+# plot_model(modlistlogZn[[35]], type='pred', terms = c('heatsubAADTlog100', 'heatsubslopelog300'))
+# plot_model(modlistlogZn[[35]], type='pred', terms = c('heatSPDlog300', 'heatsubslopelog300'))
 
 modlistlogZn[[14]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + 
-                        heatOSMAADTlog300, 
+                        heatsubAADTlog300, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[14]])
 #ols_plot_diagnostics(modlistlogZn[[12]])
 ols_coll_diag(modlistlogZn[[14]])
 ols_correlations(modlistlogZn[[14]])
 
-modlistlogZn[[15]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300*heatOSMAADTlog300, 
+modlistlogZn[[15]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300*heatsubAADTlog300, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[15]])
 #ols_plot_diagnostics(modlistlogZn[[13]])
 ols_coll_diag(modlistlogZn[[15]])
 ols_correlations(modlistlogZn[[15]])
-#plot_model(modlistlogZn[[13]], type='pred', terms = c('heatbing1902log300', 'heatOSMAADTlog100'))
+#plot_model(modlistlogZn[[13]], type='pred', terms = c('heatbing1902log300', 'heatsubAADTlog100'))
 
-modlistlogZn[[16]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300*heatOSMAADTlog300*heatSPDlog300, 
+modlistlogZn[[16]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300*heatsubAADTlog300*heatSPDlog300, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[16]])
 #ols_plot_diagnostics(modlistlogZn[[16]])
@@ -3405,7 +3438,7 @@ ols_regress(modlistlogZn[[17]])
 ols_coll_diag(modlistlogZn[[17]])
 ols_correlations(modlistlogZn[[17]])
 
-modlistlogZn[[18]] <- lm(logZn ~ heatbustransitlog300 + heatOSMAADTlog100 + nlcd_imp_ps, 
+modlistlogZn[[18]] <- lm(logZn ~ heatbustransitlog300 + heatsubAADTlog100 + nlcd_imp_ps, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[18]])
 #ols_plot_diagnostics(modlistlogZn[[18]])
@@ -3420,7 +3453,7 @@ ols_coll_diag(modlistlogZn[[25]])
 ols_correlations(modlistlogZn[[25]])
 
 modlistlogZn[[19]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + 
-                        heatOSMAADTlog100 + nlcd_imp_ps, 
+                        heatsubAADTlog100 + nlcd_imp_ps, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[19]])
 #ols_plot_diagnostics(modlistlogZn[[19]])
@@ -3428,7 +3461,7 @@ ols_coll_diag(modlistlogZn[[19]])
 ols_correlations(modlistlogZn[[19]])
 
 modlistlogZn[[20]] <- lm(logZn ~ heatbustransitlog300 + heatbing1902log300 + 
-                        heatOSMAADTlog300 + nlcd_imp_ps, 
+                        heatsubAADTlog300 + nlcd_imp_ps, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[20]])
 #ols_plot_diagnostics(modlistlogZn[[20]])
@@ -3451,14 +3484,14 @@ ols_regress(modlistlogZn[[22]])
 ols_coll_diag(modlistlogZn[[22]])
 ols_correlations(modlistlogZn[[22]])
 
-modlistlogZn[[26]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatOSMgradientlog300 + nlcd_imp_ps, 
+modlistlogZn[[26]] <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300*heatsubslopelog300 + nlcd_imp_ps, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[26]])
 #ols_plot_diagnostics(modlistlogZn[[26]])
 ols_coll_diag(modlistlogZn[[26]])
 ols_correlations(modlistlogZn[[26]])
 
-modlistlogZn[[27]] <- lm(logZn ~ heatbustransitlog300 + heatOSMAADTlog100*heatOSMgradientlog300 + nlcd_imp_ps, 
+modlistlogZn[[27]] <- lm(logZn ~ heatbustransitlog300 + heatsubAADTlog100*heatsubslopelog300 + nlcd_imp_ps, 
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[27]])
 #ols_plot_diagnostics(modlistlogZn[[27]])
@@ -3525,8 +3558,8 @@ ols_regress(modlistlogZn[[46]])
 ols_coll_diag(modlistlogZn[[46]])
 ols_correlations(modlistlogZn[[46]])
 
-modlistlogZn[[47]] <- lm(logZn ~ heatbing1902log300*heatSPDlog300 + heatOSMgradientlog300 + 
-                           heatbing1902log300:heatOSMgradientlog300,
+modlistlogZn[[47]] <- lm(logZn ~ heatbing1902log300*heatSPDlog300 + heatsubslopelog300 + 
+                           heatbing1902log300:heatsubslopelog300,
                          data = pollutfieldclean_cast)
 ols_regress(modlistlogZn[[47]])
 #ols_plot_diagnostics(modlistlogZn[[47])
@@ -3567,7 +3600,7 @@ modlistglmZn <- list() #List to hold models
 modlistglmZn[[1]] <- glm(Zn ~ 1, data = pollutfieldclean_cast, family=gaussian(link='log')) #Null/Intercept model
 par(mfrow=c(2,2))
 
-modlistglmZn[[2]] <- glm(Zn ~ heatOSMAADTlog300, data = pollutfieldclean_cast, family=gaussian(link='log'))
+modlistglmZn[[2]] <- glm(Zn ~ heatsubAADTlog300, data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[2]])
 plot(modlistglmZn[[2]])
 
@@ -3596,7 +3629,7 @@ ggplot(pollutfieldclean_cast, aes(x=heatSPDlog300)) +
 summary(modlistglmZn[[7]])
 plot(modlistglmZn[[7]])
 
-modlistglmZn[[8]] <- glm(Zn ~ heatOSMgradientlog300, data = pollutfieldclean_cast, family=gaussian(link='log'))
+modlistglmZn[[8]] <- glm(Zn ~ heatsubslopelog300, data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[8]])
 plot(modlistglmZn[[8]])
 
@@ -3619,24 +3652,24 @@ plot_model(modlistglmZn[[11]], type='pred', terms = c('heatbing1902log300', 'hea
 
 
 modlistglmZn[[12]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                           heatOSMAADTlog300, 
+                           heatsubAADTlog300, 
                          data = pollutfieldclean_cast, family=gaussian(link = "log"))
 summary(modlistglmZn[[12]])
 plot(modlistglmZn[[12]])
 
-modlistglmZn[[13]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300*heatOSMAADTlog300, 
+modlistglmZn[[13]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300*heatsubAADTlog300, 
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[13]])
 plot(modlistglmZn[[13]])
 
 modlistglmZn[[14]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300*heatSPDlog300 + 
-                           heatOSMAADTlog300, 
+                           heatsubAADTlog300, 
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[14]])
 plot(modlistglmZn[[14]])
 
 
-modlistglmZn[[15]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300*heatOSMgradientlog300 + 
+modlistglmZn[[15]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300*heatsubslopelog300 + 
                            heatSPDlog300, 
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[15]])
@@ -3644,27 +3677,27 @@ plot(modlistglmZn[[15]])
 
 
 modlistglmZn[[16]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                           heatSPDlog300*heatOSMgradientlog300, 
+                           heatSPDlog300*heatsubslopelog300, 
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[16]])
 plot(modlistglmZn[[16]])
 
 
 modlistglmZn[[17]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                           heatSPDlog300*heatOSMgradientlog300 + nlcd_imp_ps, 
+                           heatSPDlog300*heatsubslopelog300 + nlcd_imp_ps, 
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[17]])
 plot(modlistglmZn[[17]])
 
 modlistglmZn[[18]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300 + 
-                           heatSPDlog300*heatOSMgradientlog300 + nlcd_imp_ps:heatSPDlog300, 
+                           heatSPDlog300*heatsubslopelog300 + nlcd_imp_ps:heatSPDlog300, 
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[18]])
 plot(modlistglmZn[[18]])
 
 
 modlistglmZn[[19]] <- glm(Zn ~ heatbustransitlog300 + heatbing1902log300*nlcd_imp_ps + 
-                           heatSPDlog300*heatOSMgradientlog300, 
+                           heatSPDlog300*heatsubslopelog300, 
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[19]])
 plot(modlistglmZn[[19]])
@@ -3678,13 +3711,13 @@ plot(modlistglmZn[[20]])
 
 
 #Build models without bus transit
-modlistglmZn[[21]] <- glm(Zn ~ heatOSMAADTlog300 + heatbing1902log300 + heatSPDlog300,
+modlistglmZn[[21]] <- glm(Zn ~ heatsubAADTlog300 + heatbing1902log300 + heatSPDlog300,
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[21]])
 plot(modlistglmZn[[21]])
 
 
-modlistglmZn[[22]] <- glm(Zn ~ heatOSMAADTlog300*heatbing1902log300,
+modlistglmZn[[22]] <- glm(Zn ~ heatsubAADTlog300*heatbing1902log300,
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[22]])
 plot(modlistglmZn[[22]])
@@ -3696,30 +3729,30 @@ summary(modlistglmZn[[23]])
 plot(modlistglmZn[[23]])
 
 
-modlistglmZn[[24]] <- glm(Zn ~ heatOSMAADTlog300*heatbing1902log300 + heatSPDlog300,
+modlistglmZn[[24]] <- glm(Zn ~ heatsubAADTlog300*heatbing1902log300 + heatSPDlog300,
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[24]])
 plot(modlistglmZn[[24]])
 
 
-modlistglmZn[[25]] <- glm(Zn ~ heatOSMAADTlog300*heatbing1902log300*heatSPDlog300,
+modlistglmZn[[25]] <- glm(Zn ~ heatsubAADTlog300*heatbing1902log300*heatSPDlog300,
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[25]])
 plot(modlistglmZn[[25]])
 
-modlistglmZn[[26]] <- glm(Zn ~ heatOSMAADTlog300 + heatbing1902log300*heatOSMgradientlog300,
+modlistglmZn[[26]] <- glm(Zn ~ heatsubAADTlog300 + heatbing1902log300*heatsubslopelog300,
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[26]])
 plot(modlistglmZn[[26]])
 
-modlistglmZn[[27]] <- glm(Zn ~ heatOSMAADTlog300 + heatbing1902log300 + nlcd_imp_ps,
+modlistglmZn[[27]] <- glm(Zn ~ heatsubAADTlog300 + heatbing1902log300 + nlcd_imp_ps,
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[27]])
 plot(modlistglmZn[[27]])
 
 
 #Build models without congestion
-modlistglmZn[[28]] <- glm(Zn ~  heatbustransitlog300 + heatOSMAADTlog300,
+modlistglmZn[[28]] <- glm(Zn ~  heatbustransitlog300 + heatsubAADTlog300,
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[28]])
 plot(modlistglmZn[[28]])
@@ -3731,13 +3764,13 @@ summary(modlistglmZn[[29]])
 plot(modlistglmZn[[29]])
 
 
-modlistglmZn[[30]] <- glm(Zn ~  heatbustransitlog300 + heatSPDlog300*heatOSMgradientlog300,
+modlistglmZn[[30]] <- glm(Zn ~  heatbustransitlog300 + heatSPDlog300*heatsubslopelog300,
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[30]])
 plot(modlistglmZn[[30]])
 
 
-modlistglmZn[[31]] <- glm(Zn ~  heatbustransitlog300 + heatSPDlog300*heatOSMgradientlog300 +
+modlistglmZn[[31]] <- glm(Zn ~  heatbustransitlog300 + heatSPDlog300*heatsubslopelog300 +
                            nlcd_imp_ps,
                          data = pollutfieldclean_cast, family=gaussian(link='log'))
 summary(modlistglmZn[[31]])
@@ -3777,7 +3810,7 @@ mod31_nooutliers <- regdiagnostic_customtab(modlistlogZn[[31]], maxpar=vnum,
                                             kCV = TRUE, k=10, cvreps=50)
 subdat31 <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
                                     strsplit(gsub('\\\\', '', mod31_nooutliers['outliers']), ',')$outliers),]
-mod31_nooutliersub <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300 * heatOSMAADTlog100, 
+mod31_nooutliersub <- lm(logZn ~ heatbustransitlog300 + heatSPDlog300 * heatsubAADTlog100, 
                          data = subdat31)
 ols_regress(mod31_nooutliersub)
 ols_plot_diagnostics(mod31_nooutliersub)
@@ -3788,7 +3821,7 @@ qplot(subdat31$heatbustransitlog300, mod31_nooutliersub$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 qplot(subdat31$heatSPDlog300, mod31_nooutliersub$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat31$heatOSMAADTlog300, mod31_nooutliersub$residuals) + 
+qplot(subdat31$heatsubAADTlog300, mod31_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 qplot(subdat31$heatbing1902log300, mod31_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
@@ -3799,7 +3832,7 @@ mod12_nooutliers <- regdiagnostic_customtab(modlistlogZn[[12]], maxpar=vnum,
                                             kCV = TRUE, k=10, cvreps=50)
 subdat12 <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
                                     strsplit(gsub('\\\\', '', mod12_nooutliers['outliers']), ',')$outliers),]
-mod12_nooutliersub <- lm(logZn ~  heatbustransitlog300 + heatbing1902log300 + #heatOSMAADTlog100 * 
+mod12_nooutliersub <- lm(logZn ~  heatbustransitlog300 + heatbing1902log300 + #heatsubAADTlog100 * 
                            heatSPDlog300 + I(heatSPDlog300^2), 
                          data = subdat12)
 ols_regress(mod12_nooutliersub)
@@ -3814,7 +3847,7 @@ qplot(subdat12$heatbing1902log300, mod12_nooutliersub$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 qplot(subdat12$nlcd_imp_ps, mod12_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat12$heatOSMAADTlog50, mod12_nooutliersub$residuals) + 
+qplot(subdat12$heatsubAADTlog50, mod12_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
 ########################Go with model 12?
@@ -3898,7 +3931,7 @@ qplot(subdat42$heatbing1902log300, mod42_nooutliersub$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 qplot(subdat42$nlcd_imp_ps, mod42_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat42$heatOSMAADTlog300, mod42_nooutliersub$residuals) + 
+qplot(subdat42$heatsubAADTlog300, mod42_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
 mod42pred <- as.data.frame(predict(mod42_nooutliersub, pollutfieldclean_cast, interval='confidence'))
@@ -3999,7 +4032,7 @@ modlistCu <- list() #List to hold models
 subdatCu <- pollutfieldclean_cast[!(SiteID %in% c(33)),]
 modlistCu[[1]] <- lm(Cu ~ 1, data = subdatCu) #Null/Intercept model
 #------ 1. Cu - Single parameter models --------
-modlistCu[[2]] <- lm(Cu ~ heatOSMAADTlog300, data = subdatCu)
+modlistCu[[2]] <- lm(Cu ~ heatsubAADTlog300, data = subdatCu)
 ols_regress(modlistCu[[2]])
 #ols_plot_diagnostics(modlistCu[[2]])
 
@@ -4019,7 +4052,7 @@ modlistCu[[6]] <- lm(Cu ~ heatSPDlog300, data = subdatCu)
 ols_regress(modlistCu[[6]])
 #ols_plot_diagnostics(modlistCu[[6]])
 
-modlistCu[[7]] <- lm(Cu ~ heatOSMgradientlog300, data = subdatCu)
+modlistCu[[7]] <- lm(Cu ~ heatsubslopelog300, data = subdatCu)
 ols_regress(modlistCu[[8]])
 #ols_plot_diagnostics(modlistCu[[8]])
 
@@ -4030,7 +4063,7 @@ ols_regress(modlistCu[[6]])
 ols_coll_diag(modlistCu[[6]])
 ols_correlations(modlistCu[[6]])
 
-modlistCu[[7]] <- lm(Cu ~ heatbustransitlog300 + heatOSMAADTlog300, data = subdatCu)
+modlistCu[[7]] <- lm(Cu ~ heatbustransitlog300 + heatsubAADTlog300, data = subdatCu)
 ols_regress(modlistCu[[7]])
 #ols_plot_diagnostics(modlistCu[[7]])
 ols_coll_diag(modlistCu[[7]])
@@ -4054,13 +4087,13 @@ ols_regress(modlistCu[[10]])
 ols_coll_diag(modlistCu[[10]])
 ols_correlations(modlistCu[[10]])
 
-modlistCu[[11]] <- lm(Cu ~ heatbustransitlog300*heatOSMgradientlog300, data = subdatCu)
+modlistCu[[11]] <- lm(Cu ~ heatbustransitlog300*heatsubslopelog300, data = subdatCu)
 ols_regress(modlistCu[[11]])
 #ols_plot_diagnostics(modlistCu[[11]])
 ols_coll_diag(modlistCu[[11]])
 ols_correlations(modlistCu[[11]])
 
-modlistCu[[12]] <- lm(Cu ~ heatbustransitlog300 + nlcd_imp_ps + heatOSMAADTlog300, data = subdatCu)
+modlistCu[[12]] <- lm(Cu ~ heatbustransitlog300 + nlcd_imp_ps + heatsubAADTlog300, data = subdatCu)
 ols_regress(modlistCu[[12]])
 #ols_plot_diagnostics(modlistCu[[12]])
 ols_coll_diag(modlistCu[[12]])
@@ -4073,7 +4106,7 @@ ols_coll_diag(modlistCu[[13]])
 ols_correlations(modlistCu[[13]])
 plot_model(modlistCu[[13]], type='int')
 
-modlistCu[[14]] <- lm(Cu ~ heatbustransitlog300*heatOSMAADTlog300 + nlcd_imp_ps, data = subdatCu)
+modlistCu[[14]] <- lm(Cu ~ heatbustransitlog300*heatsubAADTlog300 + nlcd_imp_ps, data = subdatCu)
 ols_regress(modlistCu[[14]])
 #ols_plot_diagnostics(modlistCu[[14]])
 ols_coll_diag(modlistCu[[14]])
@@ -4130,7 +4163,7 @@ qplot(subdat$heatbing1902log300, mod6_nooutliersub$residuals) +
   geom_smooth(method='lm', color='red')
 qplot(subdat$heatSPDlog300, mod6_nooutliersub$residuals) +
   geom_smooth(method='lm', color='red')
-qplot(subdat$heatOSMAADTlog300, mod6_nooutliersub$residuals) + 
+qplot(subdat$heatsubAADTlog300, mod6_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 qplot(subdat$nlcd_imp_ps, mod6_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
@@ -4172,7 +4205,7 @@ qplot(subdat$heatbing1902log300, mod9_nooutliersub$residuals) +
   geom_smooth(method='lm', color='red')
 qplot(subdat$heatSPDlog300, mod9_nooutliersub$residuals) +
   geom_smooth(method='lm', color='red')
-qplot(subdat$heatOSMAADTlog300, mod9_nooutliersub$residuals) + 
+qplot(subdat$heatsubAADTlog300, mod9_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 qplot(subdat$nlcd_imp_ps, mod9_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
@@ -4273,7 +4306,7 @@ subdatCu[, logCu := log(Cu)]
 modlistlogCu <- list() #List to hold models
 modlistlogCu[[1]] <- lm(logCu ~ 1, data = subdatCu) #Null/Intercept model
 #------ 8. log(Cu) - Single parameter models --------
-modlistlogCu[[2]] <- lm(logCu ~ heatOSMAADTlog300, data = subdatCu)
+modlistlogCu[[2]] <- lm(logCu ~ heatsubAADTlog300, data = subdatCu)
 ols_regress(modlistlogCu[[2]])
 #ols_plot_diagnostics(modlistlogCu[[2]])
 
@@ -4293,7 +4326,7 @@ modlistlogCu[[6]] <- lm(logCu ~ heatSPDlog300, data = subdatCu)
 ols_regress(modlistlogCu[[6]])
 #ols_plot_diagnostics(modlistlogCu[[6]])
 
-modlistlogCu[[7]] <- lm(logCu ~ heatOSMgradientlog300, data = subdatCu)
+modlistlogCu[[7]] <- lm(logCu ~ heatsubslopelog300, data = subdatCu)
 ols_regress(modlistlogCu[[8]])
 #ols_plot_diagnostics(modlistlogCu[[8]])
 
@@ -4304,7 +4337,7 @@ ols_regress(modlistlogCu[[6]])
 ols_coll_diag(modlistlogCu[[6]])
 ols_correlations(modlistlogCu[[6]])
 
-modlistlogCu[[7]] <- lm(logCu ~ heatbustransitlog300 + heatOSMAADTlog300, data = subdatCu)
+modlistlogCu[[7]] <- lm(logCu ~ heatbustransitlog300 + heatsubAADTlog300, data = subdatCu)
 ols_regress(modlistlogCu[[7]])
 #ols_plot_diagnostics(modlistlogCu[[7]])
 ols_coll_diag(modlistlogCu[[7]])
@@ -4328,13 +4361,13 @@ ols_regress(modlistlogCu[[10]])
 ols_coll_diag(modlistlogCu[[10]])
 ols_correlations(modlistlogCu[[10]])
 
-modlistlogCu[[11]] <- lm(logCu ~ heatbustransitlog300*heatOSMgradientlog300, data = subdatCu)
+modlistlogCu[[11]] <- lm(logCu ~ heatbustransitlog300*heatsubslopelog300, data = subdatCu)
 ols_regress(modlistlogCu[[11]])
 #ols_plot_diagnostics(modlistlogCu[[11]])
 ols_coll_diag(modlistlogCu[[11]])
 ols_correlations(modlistlogCu[[11]])
 
-modlistlogCu[[12]] <- lm(logCu ~ heatbustransitlog300 + nlcd_imp_ps + heatOSMAADTlog300, data = subdatCu)
+modlistlogCu[[12]] <- lm(logCu ~ heatbustransitlog300 + nlcd_imp_ps + heatsubAADTlog300, data = subdatCu)
 ols_regress(modlistlogCu[[12]])
 #ols_plot_diagnostics(modlistlogCu[[12]])
 ols_coll_diag(modlistlogCu[[12]])
@@ -4347,7 +4380,7 @@ ols_coll_diag(modlistlogCu[[13]])
 ols_correlations(modlistlogCu[[13]])
 plot_model(modlistlogCu[[13]], type='int')
 
-modlistlogCu[[14]] <- lm(logCu ~ heatbustransitlog300*heatOSMAADTlog300 + nlcd_imp_ps, data = subdatCu)
+modlistlogCu[[14]] <- lm(logCu ~ heatbustransitlog300*heatsubAADTlog300 + nlcd_imp_ps, data = subdatCu)
 ols_regress(modlistlogCu[[14]])
 #ols_plot_diagnostics(modlistlogCu[[14]])
 ols_coll_diag(modlistlogCu[[14]])
@@ -4360,7 +4393,7 @@ ols_coll_diag(modlistlogCu[[15]])
 ols_correlations(modlistlogCu[[15]])
 
 #Models without bus transit
-modlistlogCu[[16]] <- lm(logCu ~ heatOSMAADTlog300 + heatbing1902log300, data = subdatCu)
+modlistlogCu[[16]] <- lm(logCu ~ heatsubAADTlog300 + heatbing1902log300, data = subdatCu)
 ols_regress(modlistlogCu[[16]])
 #ols_plot_diagnostics(modlistlogCu[[16]])
 ols_coll_diag(modlistlogCu[[16]])
@@ -4372,38 +4405,38 @@ ols_regress(modlistlogCu[[17]])
 ols_coll_diag(modlistlogCu[[17]])
 ols_correlations(modlistlogCu[[17]])
 
-modlistlogCu[[18]] <- lm(logCu ~ heatSPDlog300 +  heatOSMAADTlog300, data = subdatCu)
+modlistlogCu[[18]] <- lm(logCu ~ heatSPDlog300 +  heatsubAADTlog300, data = subdatCu)
 ols_regress(modlistlogCu[[18]])
 #ols_plot_diagnostics(modlistlogCu[[18]])
 ols_coll_diag(modlistlogCu[[18]])
 ols_correlations(modlistlogCu[[18]])
 
-modlistlogCu[[19]] <- lm(logCu ~ heatSPDlog300 +  heatOSMAADTlog300 + heatbing1902log300, data = subdatCu)
+modlistlogCu[[19]] <- lm(logCu ~ heatSPDlog300 +  heatsubAADTlog300 + heatbing1902log300, data = subdatCu)
 ols_regress(modlistlogCu[[19]])
 #ols_plot_diagnostics(modlistlogCu[[19]])
 ols_coll_diag(modlistlogCu[[19]])
 ols_correlations(modlistlogCu[[19]])
 
-modlistlogCu[[20]] <- lm(logCu ~ heatSPDlog300*heatOSMAADTlog300, data = subdatCu)
+modlistlogCu[[20]] <- lm(logCu ~ heatSPDlog300*heatsubAADTlog300, data = subdatCu)
 ols_regress(modlistlogCu[[20]])
 #ols_plot_diagnostics(modlistlogCu[[20]])
 ols_coll_diag(modlistlogCu[[20]])
 ols_correlations(modlistlogCu[[20]])
 #plot_model(modlistlogCu[[20]], type='int', mdrt.values='all')
 
-modlistlogCu[[21]] <- lm(logCu ~ heatOSMAADTlog300 + heatbing1902log300 + nlcd_imp_ps, data = subdatCu)
+modlistlogCu[[21]] <- lm(logCu ~ heatsubAADTlog300 + heatbing1902log300 + nlcd_imp_ps, data = subdatCu)
 ols_regress(modlistlogCu[[21]])
 #ols_plot_diagnostics(modlistlogCu[[21]])
 ols_coll_diag(modlistlogCu[[21]])
 ols_correlations(modlistlogCu[[21]])
 
-modlistlogCu[[22]] <- lm(logCu ~ heatOSMAADTlog300 + heatSPDlog300 + nlcd_imp_ps, data = subdatCu)
+modlistlogCu[[22]] <- lm(logCu ~ heatsubAADTlog300 + heatSPDlog300 + nlcd_imp_ps, data = subdatCu)
 ols_regress(modlistlogCu[[22]])
 #ols_plot_diagnostics(modlistlogCu[[22]])
 ols_coll_diag(modlistlogCu[[22]])
 ols_correlations(modlistlogCu[[22]])
 
-modlistlogCu[[23]] <- lm(logCu ~ heatOSMAADTlog300 + nlcd_imp_ps, data = subdatCu)
+modlistlogCu[[23]] <- lm(logCu ~ heatsubAADTlog300 + nlcd_imp_ps, data = subdatCu)
 ols_regress(modlistlogCu[[23]])
 #ols_plot_diagnostics(modlistlogCu[[23]])
 ols_coll_diag(modlistlogCu[[23]])
@@ -4498,8 +4531,8 @@ saveRDS(pollutmaxscale, file = file.path(moddir, 'fieldXRFmodels_scaling.rds'))
 # predict(modlistA[[48]], pollutfieldclean_cast)
 # 
 # 
-# coef(modlistlogCu[[23]])['heatOSMAADTlog300']
-# coef(modlistlogCu[[23]])$heatOSMAADTlog300
+# coef(modlistlogCu[[23]])['heatsubAADTlog300']
+# coef(modlistlogCu[[23]])$heatsubAADTlog300
 # 
 # V <- vcov(modlistA[[48]])
 # 
