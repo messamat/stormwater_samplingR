@@ -1,6 +1,7 @@
 library(rprojroot)
 library(data.table)
 library(ggplot2)
+library(GGally)
 library(rgdal)
 library(magrittr)
 library(mgcv)
@@ -9,6 +10,7 @@ library(MARSS)
 library(tsibble)
 library(tidyr)
 library(tseries)
+library(zoo)
 library(forecast)
 
 rootdir <- find_root(has_dir("src"))
@@ -18,19 +20,19 @@ inspectdir <- file.path(resdir, "data_inspection")
 moddir <- file.path(resdir, "data_modeling")
 #load(file.path(rootdir, 'src/stormwater_samplingR/20190225dat.Rdata'))
 
-# 2. Analyze annual summary data
+##### 1. Analyze annual summary data ####
 ############################################################################################################################################
-#Import data
+#---- Import data ----
 AQIsites <- as.data.table(readOGR(dsn = file.path(resdir, 'airdata'), layer = 'airsites20190315'))
 AQI2018<- fread(file.path(datadir, 'EPA_AirData_201902/annual_conc_by_monitor_2018/annual_conc_by_monitor_2018.csv'))
 AQI2017<- fread(file.path(datadir, 'EPA_AirData_201902/annual_conc_by_monitor_2017/annual_conc_by_monitor_2017.csv'))
 AQI2016<- fread(file.path(datadir, 'EPA_AirData_201902/annual_conc_by_monitor_2016/annual_conc_by_monitor_2016.csv'))
 AQI2015<- fread(file.path(datadir, 'EPA_AirData_201902/annual_conc_by_monitor_2015/annual_conc_by_monitor_2015.csv'))
 
-#Get scaling for pollution variables
+#---- Get scaling for pollution variables ----
 scaling <- readRDS(file.path(moddir, 'fieldXRFmodels_scaling.rds'))
 
-#Predict Zn for each site
+#---- Predict Zn for each site ----
 AQIsites[, heatbing1902log300 := 10*hbglog300/scaling$heatbing1902log300]
 AQIsites[, heatSPDlog300 := 100*hSPDlog300/scaling$heatSPDlog300]
 qplot(pollutfieldclean_cast$heatSPDlog300)
@@ -41,7 +43,7 @@ AQIsites[, predZn := exp(predict(modlistlogZn[[42]],
                                  data.frame(heatbing1902log300, heatSPDlog300)))]
 
 
-#Summarize 2015-2018 air monitoring data
+#---- Summarize 2015-2018 air monitoring data ----
 AQIdata <- do.call(rbind, list(AQI2018, AQI2017, AQI2016, AQI2015))
 AQIdata[, UID := paste0(`State Code`, `County Code`, `Site Num`)]
 AQIsummary <- AQIdata[, .(mean15_18 = sum(`Observation Count`*`Arithmetic Mean`)/sum(`Observation Count`),
@@ -92,9 +94,9 @@ writeOGR(SpatialPointsDataFrame(coords=coordinates(AQIZn[,.( Longitude, Latitude
          driver = 'ESRI Shapefile')
 
 
-# 2. Analyze daily summary data
+##### 2. Analyze daily summary data with station-based meteorological data ####
 ############################################################################################################################################
-#Import data
+#---- Import data ----
 AQIsites <- as.data.table(readOGR(dsn = file.path(resdir, 'airdata'), layer = 'airsites'))
 AQIfiles <- list.files(file.path(datadir, 'EPA_AirData_201902'), full.names = T, recursive = T)
 
@@ -105,7 +107,7 @@ wind <- as.data.table(do.call(rbind, lapply(grep('.*_WIND.*[.]csv', AQIfiles, va
 rh <- as.data.table(do.call(rbind, lapply(grep('.*_RH_DP.*[.]csv', AQIfiles, value=T), fread)))
 press <- as.data.table(do.call(rbind, lapply(grep('.*_PRESS.*[.]csv', AQIfiles, value=T), fread)))
 
-#Format data
+#---- Format data ----
 SPEC[, `:=`(UID = paste0(`State Code`, `County Code`, `Site Num`),
             UIDmeth = paste0(`State Code`, `County Code`, `Site Num`, `Method Code`),
             date = as.Date(`Date Local`),
@@ -148,7 +150,7 @@ press[, `:=`(UID = paste0(`State Code`, `County Code`, `Site Num`),
     by=.(UID, POC, `Parameter Name`)]
 #table(press$`Parameter Name`)
 
-#Inspect data
+#---- Inspect data ----
 summary(SPEC)
 summary(temp)
 
@@ -561,6 +563,52 @@ c(fit$AICc, fit_covobs$AICc, fit_covproc$AICc, fit_covobs_wd$AICc, fit_covproc_w
 #------------- Add # of antecedent days without winds  ---------------------####
 
 
+#### 3. Analyze daily summary data with NARR meteorological data ####
+############################################################################################################################################
+airNARR <- fread(file.path(resdir, 'airdat_NARRjoin.csv')) 
+setnames(airNARR, c("Date Local", "Arithmetic Mean"), c("datelocal", "specmea")) 
+airNARR[, datelocal := as.Date(datelocal, format="%Y-%m-%d")]
+airNARRZn <- airNARR[!(duplicated(airNARR, by= c('UID', 'datelocal', 'Parameter Name'))) &
+                       `Parameter Name`== 'Zinc PM2.5 LC',] 
+NARRcols <- colnames(airNARRZn)[32:ncol(airNARRZn)] #NARR column names
+
+#Floor values to 0 (when negative)
+table(airNARRZnfill$specmea)
+airNARRZn[specmea <= 0, specmea := 0.0001]
+
+#Fill implicitly missing dates with explicit NAs
+airNARRZnfill <- airNARRZn[, complete(.SD, datelocal = seq.Date(min(datelocal), max(datelocal), by='days'), 
+                                      fill = list(value = NA)), by=UID]
+
+
+#Compute weekdays and week-standardized Zn
+weekday_levels = c('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday')
+airNARRZnfill[, `:=`(weekday = factor(weekdays(datelocal),levels= weekday_levels),
+                 week = week(datelocal))][
+                   !is.na(specmea),
+                   `:=`(week_standardized = (specmea-mean(specmea, na.rm=T))/mean(specmea, na.rm=T),
+                        weekN = .N), by=.(week, year(datelocal), UID)][
+                          weekN > 3
+                          , weekday_mean := mean(week_standardized, na.rm=T), by=.(weekday, UID)]
+
+qplot(airNARRZnfill[, sum(is.na(specmea))/.N, by=UID]$V1) #Check % missing 
+qplot(airNARRZnfill[, mean(weekN, na.rm=T), by=UID]$V1) #Check average number of values per week
+qplot(airNARRZnfill$specmea) + scale_x_log10()
+airNARRZnfill[!is.na(specmea), .N, by=weekday]
+glm(specmea ~ as.factor(UID) + weekday, family= gaussian(link='log'), data=airNARRZnfill[!is.na(specmea),])
+
+
+
+
+
+#------------- Make union of time series -------------####
+tssub <- as.ts(read.zoo(airsub))
+tsspec <- airsub[ts(specmea, frequency=7)]
+decompose(tsspec)
+
+acf(tssub[, 'specmea'], na.action = na.pass)
+auto.arima(tssub[, 'specmea']) 
+auto.arima(tsspec7) #Too many missing values
 
 
 
