@@ -228,10 +228,10 @@ ols_noplot_resid_lev <- function(mod){
   res
 }
 
-# mod <- modlistglmZn[[2]]
-# for (mod in modlistglmZn) {
+# mod <- modlistCu[[15]]
+# for (mod in modlistCu) {
 #   print(mod$call)
-#   regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=1)
+#   regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=1, remove_outliers = 'outliers & leverage')
 # }
 
 regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', labelvec = NULL,
@@ -315,7 +315,6 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
   
 
   #Prepare Breusch pagan test
-  
   
   c(formula_out,
     nvars = length(unique(unlist(
@@ -504,6 +503,31 @@ weightmat_IDW <- function(coords, knb, mindist = 10) {
   }
   return(outmat)
 }
+
+GAMrescheck <- function(model) {
+  print(summary(model))
+  print(paste0("AICc:", AICc(model)))
+  par(mfrow=c(2,2))
+  gam.check(model)
+  par(mfrow=c(1,1))
+}
+
+GAMmultiplot <- function(model) {
+  pdim <- ceiling(sqrt(length(attr(model$terms, "term.labels"))))
+  par(mfrow=c(pdim, pdim))
+  plot(model,residuals=TRUE,shade=T, cex=6)
+  par(mfrow=c(1,1))
+}
+
+GAMinfluence <- function(mgcvmodel, data) {
+  gamite <- ldply(1:nrow(data), function(index) {
+    subdat <- data[-index,]
+    submod <- mgcv::gam(formula = mgcvmodel$formula, family=mgcvmodel$family, data=subdat)
+    influence <- sum((fitted(mgcvmodel)[-index] - fitted(submod))^2)
+    return(cbind(data[index, 'SiteIDPair'], influence))
+  })
+  return(gamite)
+}
 ###########################################################################################################################################
 
 # 1. Import data 
@@ -603,7 +627,7 @@ ICPthresholds_format <- as.data.table(t(ICPthresholds[,-1])) %>%
   .[, Elem := colnames(ICPthresholds)[-1]]
 
 ########### ---- G. Import GIS data (including pollution variables) ---- ####
-trees <- as.data.table(readOGR(dsn = file.path(resdir, 'PSPredictions.gdb'), layer = 'XRFsites_projallattri'))
+trees <- as.data.table(readOGR(dsn = file.path(resdir, 'pollution_variables.gdb'), layer = 'XRFsites_aea'))
 #summary(trees)
 heatcols <- colnames(trees)[grep('heat', colnames(trees))]
 trees[, (heatcols) := lapply(.SD, function(x){x[is.na(x)] <- 0; x}), .SDcols = heatcols]
@@ -1289,7 +1313,7 @@ pollutfieldmerge <- pollutfieldmerge[!is.na(Elem),]
 pollutfieldmerge[, pollutfield_flags := 0]
 for (chem in unique(pollutfieldmerge$Elem)) {
   print(chem)
-  pollutfield_lm <- lm(mean ~ heatbing1902log300*heatsubAADTlog300*heatsubslopelog300*nlcd_imp_ps +
+  pollutfield_lm <- lm(mean ~ heatbing1902log300proj*heatsubAADTlog300*heatsubslopelog300*nlcd_imp_ps +
                          heatbustransitlog300 + heatbustransitlog300:heatsubslopelog300, 
                        data = pollutfieldmerge[Elem == chem ,])
   ggsave(file.path(inspectdir, paste0('fieldpollution_regoutliers2', chem, '.png')),
@@ -1573,7 +1597,7 @@ pollutlabmerge[, pollutlab_flags := 0]
 pollutlabmerge <- pollutlabmerge[!is.na(Elem),]
 for (chem in unique(pollutlabmerge$Elem)) {
   print(chem)
-  pollutlab_lm <- lm(mean ~  heatbing1902log300*heatsubAADTlog300*heatsubslopelog300*nlcd_imp_ps +
+  pollutlab_lm <- lm(mean ~  heatbing1902log300proj*heatsubAADTlog300*heatsubslopelog300*nlcd_imp_ps +
                        heatbustransitlog300 + heatbustransitlog300:heatsubslopelog300, 
                      data = pollutlabmerge[Elem == chem,])
   ggsave(file.path(inspectdir, paste0('labpollution_regoutliers', chem, '.png')),
@@ -1740,7 +1764,7 @@ pollutICPmerge[, pollutICP_flags := 0]
 pollutICPmerge <- pollutICPmerge[!is.na(Elem),]
 for (chem in unique(pollutICPmerge[!is.na(Elem), Elem])) {
   print(chem)
-  pollutICP_lm <- lm(ICP ~  heatbing1902log300*heatsubAADTlog300*heatsubslopelog300*nlcd_imp_ps +
+  pollutICP_lm <- lm(ICP ~  heatbing1902log300proj*heatsubAADTlog300*heatsubslopelog300*nlcd_imp_ps +
                        heatbustransitlog300 + heatbustransitlog300:heatsubslopelog300, 
                      data = pollutICPmerge[Elem == chem,])
   ggsave(file.path(inspectdir, paste0('ICPpollution_regoutliers', chem, '.png')),
@@ -2307,38 +2331,19 @@ ggradarplot
 dev.off()
 
 
-
 "Summary of best univariate predictors for each category
 - Zn: 
-  - SPDL > AADT > SLOPE > IMPERVIOUSNESS > BING > TRANSIT
-  - AADT: log200 > log300/pow200_2/pow200_3
-  - SPDL: pow100_1=pow100_2 > log100=pow100_3
-  - slope: pow500_1/_2/_3 > log500
-  - bing: bing1902 > bing; 500>300>200; log>pow
-  - transit: log = pow_2/3 > pow_1  - 500 = 200 > 300 > 100
-  - imp_mean = imp
-
-- Cu:
-  - SPDL > AADT > SLOPE > BING  > IMPERVIOUSNESS > TRANSIT
-  - AADT: 500 > 300; pow_1 > pow_2/_3/log
-  - SPDL: 500 > 300; pow_1 > pow_2/_3/log
-  - slope: 500 > 300; pow_1>pow_2/_3> log
-  - bing: bing1902>bing; 500>300>200; log>pow
-  - transit: 200 > 300 > 500; pow_1=pow_2=log - bustransitpow200_1
-  - imp > imp_mean
-
-- Pollution index:
-  - SPDL > AADT > SLOPE > IMPERVIOUSNESS > BING > TRANSIT
-  - AADT & SPDL: log500/pow500_3 > pow500_1/_2=log300=log200=pow300_3/_2
-  - slope: pow500_1/_2>log500/pow500_3> 300
-  - bing: bing1902>bing; 500>300>200; log>pow
-  - transit: log500=pow200_2/3 > log300=log200=pow500/300/200
-  - imp = imp_mean
+  - IMPERVIOUSNESS > BING > SPDL > AADT > SLOPE  > TRANSIT
+  - AADT: 100 > 200-300 log~pw 
+  - SPDL: 50~100~200>300>500
+  - slope: 500>300>200>100 and log~pow
+  - bing: 300=200>100>500 log~pow
+  - transit: 500=300=200 > 100 log~pow
+  - imp_mean > imp
 "
-
 #---- E. Selected pollution drivers against selected field XRF all elems ----
-selcols <- c(selcols, 'heat_bingpow500_1', 'nlcd_imp_ps_mean', 'heatbustransitpow500_1',
-             'heatsubAADTpow500_1', 'heatsubslopepow500_1', 'heatsubspdlpow500_1')
+selcols <- c(selcols, 'heatsubAADTlog100', 'nlcd_imp_ps_mean', 'heatbustransitpow500_1',
+             'heatbing1902log300proj', 'heatsubslopelog500', 'heatsubspdllog100')
 
 png(file.path(inspectdir, 'cormatrix_SelFieldElem_SelPollutionDrivers.png'), 
     width = 12, height=12, units='in', res=300)
@@ -2368,15 +2373,24 @@ loadings(pollutpca)
 pollutfieldclean_cast[, `:=`(heatsubAADTlog100sqrt = sqrt(heatsubAADTlog100),
                              heatsubAADTlog200sqrt = sqrt(heatsubAADTlog200),
                              heatsubAADTlog300sqrt = sqrt(heatsubAADTlog300),
-                             heatbing1902log300sqrt = sqrt(heatbing1902log300),
-                             heatsubspdlpow100_1sqrt = sqrt(heatsubspdlpow100_1),
+                             heatbing1902log300projsqrt = sqrt(heatbing1902log300proj),
+                             heatsubspdlpow100_3sqrt = sqrt(heatsubspdlpow100_3),
                              heatsubAADTlog100thd = heatsubAADTlog300^(1/3),
                              heatsubAADTlog100frt = heatsubAADTlog100^0.25,
                              heatsubAADTlog200frt = heatsubAADTlog200^0.25,
                              heatsubAADTlog300frt = heatsubAADTlog300^0.25,
                              heatsubAADTlog100fth = heatsubAADTlog300^0.20,
                              heatsubAADTpow100_1frt = heatsubAADTpow100_1^0.25,
-                             heatsubAADTpow100_2frt = heatsubAADTpow100_2^0.25)]
+                             heatsubAADTpow100_2frt = heatsubAADTpow100_2^0.25,
+                             heatbustransitpow100_1sqrt = heatbustransitpow100_1**0.5,
+                             heatbustransitpow200_1sqrt = heatbustransitpow200_1**0.5,
+                             heatbustransitpow300_1sqrt = heatbustransitpow300_1**0.5,
+                             heatbustransitlog200sqrt = heatbustransitlog200**0.5,
+                             heatbustransitlog300sqrt = heatbustransitlog300**0.5
+                             )]
+
+pollutfieldclean_cast[, NLCD_reclass_final_PS_edit := NLCD_reclass_final_PS]
+pollutfieldclean_cast[!(NLCD_reclass_final_PS %in% c('96', '97', '98', '99')), NLCD_reclass_final_PS_edit := '1']
 
 #--------------- A. Zn ~ separate predictors ----
 extraoutliers <- c('51A', '114A', '114B', paste0(64:69, 'A')) #Remove anomalous data points by 15th Ave NE and Luwam's (latter do not appear to be precise enough
@@ -2384,20 +2398,20 @@ extraoutliers <- c('51A', '114A', '114B', paste0(64:69, 'A')) #Remove anomalous 
 modlistZn <- list() #List to hold models
 modlistZn[[1]] <- lm(Zn ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
 #------ 1. Zn - Single parameter models --------
-modlistZn[[2]] <- lm(Zn ~ heatsubAADTlog200, data = pollutfieldclean_cast)
+modlistZn[[2]] <- lm(Zn ~ heatsubAADTlog100, data = pollutfieldclean_cast)
 ols_regress(modlistZn[[2]])
 #ols_plot_diagnostics(modlistZn[[2]])
 ggplot(pollutfieldclean_cast, aes(x=heatsubAADTlog100^(1/4), y=Zn, label=paste0(SiteID, Pair),
-                                  color = heatbing1902log300)) + 
+                                  color = heatbing1902log300proj)) + 
   geom_text() + 
   scale_color_distiller(palette='Spectral')
 
-modlistZn[[3]] <- lm(Zn ~ heatbing1902log500, data = pollutfieldclean_cast)
+modlistZn[[3]] <- lm(Zn ~ heatbing1902log300proj, data = pollutfieldclean_cast)
 ols_regress(modlistZn[[3]])
 #ols_plot_diagnostics(modlistZn[[3]])
-ggplot(pollutfieldclean_cast, aes(x=heatbing1902log500, y=Zn, label=paste0(SiteID, Pair))) + 
+ggplot(pollutfieldclean_cast, aes(x=heatbing1902log300proj, y=Zn, label=paste0(SiteID, Pair))) + 
   geom_text()
-ggplot(pollutfieldclean_cast[as.numeric(SiteID) < 63,], aes(x=heatbing1902log300, y=Zn, label=paste0(SiteID, Pair))) + 
+ggplot(pollutfieldclean_cast[as.numeric(SiteID) < 63,], aes(x=heatbing1902log300proj, y=Zn, label=paste0(SiteID, Pair))) + 
   geom_text()
 
 modlistZn[[4]] <- lm(Zn ~ nlcd_imp_ps_mean, data = pollutfieldclean_cast)
@@ -2415,16 +2429,16 @@ ggplot(pollutfieldclean_cast, aes(x=nlcd_imp_ps, y=Zn, label=paste0(SiteID, Pair
 modlistZn[[6]] <- lm(Zn ~ heatbustransitlog200, data = pollutfieldclean_cast)
 ols_regress(modlistZn[[6]])
 #ols_plot_diagnostics(modlistZn[[6]])
-ggplot(pollutfieldclean_cast, aes(x=heatbustransitpow500_1, y=Zn, label=paste0(SiteID, Pair))) + 
+ggplot(pollutfieldclean_cast, aes(x=heatbustransitlog200, y=Zn, label=paste0(SiteID, Pair))) + 
   geom_text()
 
-modlistZn[[7]] <- lm(Zn ~ heatsubspdlpow100_1, data = pollutfieldclean_cast)
+modlistZn[[7]] <- lm(Zn ~ heatsubspdlpow100_3, data = pollutfieldclean_cast)
 ols_regress(modlistZn[[7]])
 #ols_plot_diagnostics(modlistZn[[7]])
-ggplot(pollutfieldclean_cast, aes(x=heatsubspdlpow100_1, y=Zn, 
+ggplot(pollutfieldclean_cast, aes(x=heatsubspdlpow100_3, y=Zn, 
                                   label=paste0(SiteID, Pair), color=nlcd_imp_ps_mean)) + 
   geom_text() +
-  geom_smooth() +
+  geom_smooth(method='lm') +
   scale_color_distiller(palette='Spectral')
 
 modlistZn[[8]] <- lm(Zn ~ heatsubslopepow500_1, data = pollutfieldclean_cast)
@@ -2434,83 +2448,83 @@ ggplot(pollutfieldclean_cast, aes(x=heatsubslopepow500_1, y=Zn, label=paste0(Sit
   geom_text()
 
 #------ 2. Zn - Multiparameter models --------
-modlistZn[[9]] <- lm(Zn ~ heatsubspdlpow100_1 + heatsubAADTlog200, 
+modlistZn[[9]] <- lm(Zn ~ heatsubspdlpow100_3 + heatsubAADTlog100, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[9]])
 #ols_plot_diagnostics(modlistZn[[9]])
 ols_coll_diag(modlistZn[[9]])
 ols_correlations(modlistZn[[9]])
 
-modlistZn[[10]] <- lm(Zn ~ heatsubspdlpow100_1 + heatbing1902log300, 
+modlistZn[[10]] <- lm(Zn ~ heatsubspdlpow100_3 + heatbing1902log300proj, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[10]])
 #ols_plot_diagnostics(modlistZn[[10]])
 ols_coll_diag(modlistZn[[10]])
 ols_correlations(modlistZn[[10]])
 
-modlistZn[[11]] <- lm(Zn ~  heatsubspdlpow100_1 + nlcd_imp_ps, 
+modlistZn[[11]] <- lm(Zn ~  heatsubspdlpow100_3 + nlcd_imp_ps_mean, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[11]])
 #ols_plot_diagnostics(modlistZn[[11]])
 ols_coll_diag(modlistZn[[11]])
 ols_correlations(modlistZn[[11]])
 
-modlistZn[[12]] <- lm(Zn ~ heatsubspdlpow100_1 + heatbustransitlog200, 
+modlistZn[[12]] <- lm(Zn ~ heatsubspdlpow100_3 + heatbustransitlog200, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[12]])
 #ols_plot_diagnostics(modlistZn[[12]])
 ols_coll_diag(modlistZn[[12]])
 ols_correlations(modlistZn[[12]])
 
-modlistZn[[13]] <- lm(Zn ~ heatsubspdlpow100_1 + heatsubslopepow500_1, 
+modlistZn[[13]] <- lm(Zn ~ heatsubspdlpow100_3 + heatsubslopepow500_1, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[13]])
 #ols_plot_diagnostics(modlistZn[[13]])
 ols_coll_diag(modlistZn[[13]])
 ols_correlations(modlistZn[[13]])
 
-modlistZn[[14]] <- lm(Zn ~ heatsubspdlpow100_1*heatsubAADTlog200, 
+modlistZn[[14]] <- lm(Zn ~ heatsubspdlpow100_3*heatsubAADTlog100, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[14]])
 #ols_plot_diagnostics(modlistZn[[14]])
 ols_coll_diag(modlistZn[[14]])
 ols_correlations(modlistZn[[14]])
 
-modlistZn[[15]] <- lm(Zn ~ heatsubspdlpow100_1*heatbing1902log300, 
+modlistZn[[15]] <- lm(Zn ~ heatsubspdlpow100_3*heatbing1902log300proj, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[15]])
 #ols_plot_diagnostics(modlistZn[[15]])
 ols_coll_diag(modlistZn[[15]])
 ols_correlations(modlistZn[[15]])
 
-modlistZn[[16]] <- lm(Zn ~ heatsubspdlpow100_1*heatbing1902log300 + nlcd_imp_ps_mean , 
+modlistZn[[16]] <- lm(Zn ~ heatsubspdlpow100_3*heatbing1902log300proj + nlcd_imp_ps_mean , 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[16]])
 #ols_plot_diagnostics(modlistZn[[16]])
 ols_coll_diag(modlistZn[[16]])
 ols_correlations(modlistZn[[16]])
 
-modlistZn[[17]] <- lm(Zn ~ heatsubspdlpow100_1 + heatbing1902log300 + nlcd_imp_ps_mean, 
+modlistZn[[17]] <- lm(Zn ~ heatsubspdlpow100_3 + heatbing1902log300proj + nlcd_imp_ps_mean, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[17]])
 #ols_plot_diagnostics(modlistZn[[17]])
 ols_coll_diag(modlistZn[[17]])
 ols_correlations(modlistZn[[17]])
 
-modlistZn[[18]] <- lm(Zn ~ heatsubspdlpow100_1*nlcd_imp_ps_mean + heatbing1902log300,
+modlistZn[[18]] <- lm(Zn ~ heatsubspdlpow100_3*nlcd_imp_ps_mean + heatbing1902log300proj,
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[18]])
 #ols_plot_diagnostics(modlistZn[[18]])
 ols_coll_diag(modlistZn[18])
 ols_correlations(modlistZn[[18]])
 
-modlistZn[[19]] <- lm(Zn ~ heatsubspdlpow100_1 + heatbing1902log300*nlcd_imp_ps_mean, 
+modlistZn[[19]] <- lm(Zn ~ heatsubspdlpow100_3 + heatbing1902log300proj*nlcd_imp_ps_mean, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[19]])
 #ols_plot_diagnostics(modlistZn[[19]])
 ols_correlations(modlistZn[[19]])
 
-modlistZn[[20]] <- lm(Zn ~ heatsubspdlpow100_1 + heatbing1902log300*nlcd_imp_ps_mean + 
+modlistZn[[20]] <- lm(Zn ~ heatsubspdlpow100_3 + heatbing1902log300proj*nlcd_imp_ps_mean + 
                         heatbustransitlog200, 
                      data = pollutfieldclean_cast)
 ols_regress(modlistZn[[20]])
@@ -2518,12 +2532,6 @@ ols_regress(modlistZn[[20]])
 ols_coll_diag(modlistZn[20])
 ols_correlations(modlistZn[[20]])
 
-modlistZn[[21]] <- lm(Zn ~ heatsubspdlpow100_1*heatbustransitlog200 + heatbing1902log300*nlcd_imp_ps_mean, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistZn[[21]])
-#ols_plot_diagnostics(modlistZn[[21]])
-ols_coll_diag(modlistZn[21])
-ols_correlations(modlistZn[[21]])
 
 #------ 3. Zn - Transformed predictors --------
 modlistZn[[21]] <- lm(Zn ~ heatsubAADTlog200sqrt, 
@@ -2533,14 +2541,14 @@ ols_regress(modlistZn[[21]])
 ols_coll_diag(modlistZn[[21]])
 ols_correlations(modlistZn[[21]])
 
-modlistZn[[22]] <- lm(Zn ~ heatsubspdlpow100_1sqrt, 
+modlistZn[[22]] <- lm(Zn ~ heatsubspdlpow100_3sqrt, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[22]])
 #ols_plot_diagnostics(modlistZn[[22]])
 ols_coll_diag(modlistZn[[22]])
 ols_correlations(modlistZn[[22]])
 
-modlistZn[[23]] <- lm(Zn ~ heatbing1902log300sqrt, 
+modlistZn[[23]] <- lm(Zn ~ heatbing1902log300projsqrt, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[23]])
 #ols_plot_diagnostics(modlistZn[[23]])
@@ -2561,36 +2569,36 @@ ols_regress(modlistZn[[25]])
 ols_coll_diag(modlistZn[[25]])
 ols_correlations(modlistZn[[25]])
 
-modlistZn[[26]] <- lm(Zn ~ heatsubAADTlog100sqrt + heatsubspdlpow100_1sqrt, 
+modlistZn[[26]] <- lm(Zn ~ heatsubAADTlog100sqrt + heatsubspdlpow100_3sqrt, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[26]])
 #ols_plot_diagnostics(modlistZn[[26]])
 ols_coll_diag(modlistZn[[26]])
 ols_correlations(modlistZn[[26]])
 
-modlistZn[[27]] <- lm(Zn ~ heatsubAADTlog100sqrt*heatsubspdlpow100_1, 
+modlistZn[[27]] <- lm(Zn ~ heatsubAADTlog100sqrt*heatsubspdlpow100_3, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[27]])
 #ols_plot_diagnostics(modlistZn[[27]])
 ols_coll_diag(modlistZn[[27]])
 ols_correlations(modlistZn[[27]])
 
-modlistZn[[28]] <- lm(Zn ~ heatsubAADTlog100sqrt*heatsubspdlpow100_1 + nlcd_imp_ps_mean, 
+modlistZn[[28]] <- lm(Zn ~ heatsubAADTlog100sqrt*heatsubspdlpow100_3 + nlcd_imp_ps_mean, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[28]])
 #ols_plot_diagnostics(modlistZn[[28]])
 ols_coll_diag(modlistZn[[28]])
 ols_correlations(modlistZn[[28]])
 
-modlistZn[[29]] <- lm(Zn ~ (heatsubAADTlog100sqrt)*heatsubspdlpow100_1 + heatbing1902log300, 
+modlistZn[[29]] <- lm(Zn ~ (heatsubAADTlog100sqrt)*heatsubspdlpow100_3 + heatbing1902log300proj, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[29]])
 #ols_plot_diagnostics(modlistZn[[29]])
 ols_coll_diag(modlistZn[[29]])
 ols_correlations(modlistZn[[29]])
 
-modlistZn[[30]] <- lm(Zn ~ (heatsubAADTlog100sqrt)*heatsubspdlpow100_1 + heatbing1902log300 +
-                        heatbing1902log300:heatsubAADTlog100sqrt, 
+modlistZn[[30]] <- lm(Zn ~ (heatsubAADTlog100sqrt)*heatsubspdlpow100_3 + heatbing1902log300proj +
+                        heatbing1902log300proj:heatsubAADTlog100sqrt, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[30]])
 #ols_plot_diagnostics(modlistZn[[30]])
@@ -2598,31 +2606,31 @@ ols_coll_diag(modlistZn[[30]])
 ols_correlations(modlistZn[[30]])
 
 
-modlistZn[[31]] <- lm(Zn ~ (heatsubAADTlog100sqrt) + heatbing1902log300 +
-                        heatbing1902log300:heatsubAADTlog100sqrt, 
+modlistZn[[31]] <- lm(Zn ~ (heatsubAADTlog100sqrt) + heatbing1902log300proj +
+                        heatbing1902log300proj:heatsubAADTlog100sqrt, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[31]])
 #ols_plot_diagnostics(modlistZn[[31]])
 ols_coll_diag(modlistZn[[31]])
 ols_correlations(modlistZn[[31]])
 
-modlistZn[[32]] <- lm(Zn ~ (heatsubspdlpow100_1) + heatbing1902log300 +
-                        heatbing1902log300:heatsubspdlpow100_1, 
+modlistZn[[32]] <- lm(Zn ~ (heatsubspdlpow100_1) + heatbing1902log300proj +
+                        heatbing1902log300proj:heatsubspdlpow100_3, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[32]])
 #ols_plot_diagnostics(modlistZn[[32]])
 ols_coll_diag(modlistZn[[32]])
 ols_correlations(modlistZn[[32]])
 
-modlistZn[[33]] <- lm(Zn ~ (heatsubAADTlog100sqrt) + heatbing1902log300 +
-                        heatbing1902log300:heatsubAADTlog100sqrt + nlcd_imp_ps, 
+modlistZn[[33]] <- lm(Zn ~ (heatsubAADTlog100sqrt) + heatbing1902log300proj +
+                        heatbing1902log300proj:heatsubAADTlog100sqrt + nlcd_imp_ps, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[33]])
 #ols_plot_diagnostics(modlistZn[[33]])
 ols_coll_diag(modlistZn[[33]])
 ols_correlations(modlistZn[[33]])
 
-modlistZn[[34]] <- lm(Zn ~ (heatsubAADTlog100sqrt) + heatbing1902log300 + nlcd_imp_ps +
+modlistZn[[34]] <- lm(Zn ~ (heatsubAADTlog100sqrt) + heatbing1902log300proj + nlcd_imp_ps +
                         heatbustransitlog200, 
                       data = pollutfieldclean_cast)
 ols_regress(modlistZn[[34]])
@@ -2630,7 +2638,14 @@ ols_regress(modlistZn[[34]])
 ols_coll_diag(modlistZn[[34]])
 ols_correlations(modlistZn[[34]])
 
-#------ 3. Zn - Make latex model summary table ----
+modlistZn[[35]] <- lm(Zn ~ (heatsubAADTlog100sqrt) + heatbing1902log300proj + nlcd_imp_ps_mean, 
+                      data = pollutfieldclean_cast)
+ols_regress(modlistZn[[35]])
+#ols_plot_diagnostics(modlistZn[[35]])
+ols_coll_diag(modlistZn[[35]])
+ols_correlations(modlistZn[[35]])
+
+#------ 4. Zn - Make latex model summary table ----
 vnum <- max(sapply(modlistZn, function(mod) {length(mod$coefficients)}))
 model_summaryZn<- as.data.table(
   ldply(modlistZn, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
@@ -2639,308 +2654,7 @@ cat(latex_format(model_summaryZn), file = file.path(moddir, 'modeltable_Zn_2019.
 setwd(moddir)
 texi2pdf('modeltable_Zn_2019.tex')
 
-#------ 4. Transform Zn ----
-pollutfieldclean_cast[, getlambda(Zn)]
-grid.arrange(
-  ggplot(pollutfieldclean_cast, aes(x=Zn)) + 
-    geom_histogram(fill='blue', alpha=1/2),
-  ggplot(pollutfieldclean_cast, aes(x=log(Zn))) + 
-    geom_histogram(fill='red', alpha=1/2))
-
-#lambda = 0.2, almost log. 
-pollutfieldclean_cast[, `:=`(logZn = log(Zn),
-                             heatsubspdlpow100_1sq = heatsubspdlpow100_1)]
-
-modlistlogZn <- list() #List to hold models
-modlistlogZn[[1]] <- lm(logZn ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
-
-#------ 1. logZn - Single parameter models --------
-modlistlogZn[[2]] <- lm(logZn ~ heatsubAADTlog200, data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[2]])
-#ols_plot_diagnostics(modlistlogZn[[2]])
-ggplot(pollutfieldclean_cast, aes(x=heatsubAADTlog200^(1/4), y=logZn, label=paste0(SiteID, Pair), 
-                                  color = heatbing1902log300)) + 
-  geom_text() + 
-  scale_color_distiller(palette='Spectral')
-
-modlistlogZn[[3]] <- lm(logZn ~ heatbing1902log300, data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[3]])
-#ols_plot_diagnostics(modlistlogZn[[3]])
-ggplot(pollutfieldclean_cast, aes(x=heatbing1902log300, y=logZn, label=paste0(SiteID, Pair))) + 
-  geom_text()
-ggplot(pollutfieldclean_cast[as.numeric(SiteID) < 63,], aes(x=heatbing1902log300, y=logZn, label=paste0(SiteID, Pair))) + 
-  geom_text()
-
-modlistlogZn[[4]] <- lm(logZn ~ nlcd_imp_ps_mean, data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[4]])
-#ols_plot_diagnostics(modlistlogZn[[4]])
-ggplot(pollutfieldclean_cast, aes(x=nlcd_imp_ps_mean, y=logZn, label=paste0(SiteID, Pair))) + 
-  geom_text()
-
-modlistlogZn[[5]] <- lm(logZn ~ nlcd_imp_ps, data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[5]])
-#ols_plot_diagnostics(modlistlogZn[[5]])
-ggplot(pollutfieldclean_cast, aes(x=nlcd_imp_ps, y=logZn, label=paste0(SiteID, Pair))) + 
-  geom_text()
-
-modlistlogZn[[6]] <- lm(logZn ~ heatbustransitlog200, data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[6]])
-#ols_plot_diagnostics(modlistlogZn[[6]])
-ggplot(pollutfieldclean_cast, aes(x=heatbustransitpow500_1, y=logZn, label=paste0(SiteID, Pair))) + 
-  geom_text()
-
-modlistlogZn[[7]] <- lm(logZn ~ heatsubspdlpow100_1, data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[7]])
-#ols_plot_diagnostics(modlistlogZn[[7]])
-ggplot(pollutfieldclean_cast, aes(x=heatsubspdlpow100_1, y=logZn, 
-                                  label=paste0(SiteID, Pair), color=nlcd_imp_ps_mean)) + 
-  geom_text() +
-  geom_smooth() +
-  scale_color_distiller(palette='Spectral')
-
-modlistlogZn[[8]] <- lm(logZn ~ heatsubslopepow500_1, data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[8]])
-#ols_plot_diagnostics(modlistlogZn[[8]])
-ggplot(pollutfieldclean_cast, aes(x=heatsubslopepow500_1, y=logZn, label=paste0(SiteID, Pair))) + 
-  geom_text()
-
-#------ 2. logZn - Multiparameter models --------
-modlistlogZn[[9]] <- lm(logZn ~ heatsubspdlpow100_1 + heatsubAADTlog200, 
-                     data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[9]])
-#ols_plot_diagnostics(modlistlogZn[[9]])
-ols_coll_diag(modlistlogZn[[9]])
-ols_correlations(modlistlogZn[[9]])
-
-modlistlogZn[[10]] <- lm(logZn ~ heatsubspdlpow100_1 + heatbing1902log300, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[10]])
-#ols_plot_diagnostics(modlistlogZn[[10]])
-ols_coll_diag(modlistlogZn[[10]])
-ols_correlations(modlistlogZn[[10]])
-
-modlistlogZn[[11]] <- lm(logZn ~  heatsubspdlpow100_1 + nlcd_imp_ps, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[11]])
-#ols_plot_diagnostics(modlistlogZn[[11]])
-ols_coll_diag(modlistlogZn[[11]])
-ols_correlations(modlistlogZn[[11]])
-
-modlistlogZn[[12]] <- lm(logZn ~ heatsubspdlpow100_1 + heatbustransitlog200, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[12]])
-#ols_plot_diagnostics(modlistlogZn[[12]])
-ols_coll_diag(modlistlogZn[[12]])
-ols_correlations(modlistlogZn[[12]])
-
-modlistlogZn[[13]] <- lm(logZn ~ heatsubspdlpow100_1 + heatsubslopepow500_1, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[13]])
-#ols_plot_diagnostics(modlistlogZn[[13]])
-ols_coll_diag(modlistlogZn[[13]])
-ols_correlations(modlistlogZn[[13]])
-
-modlistlogZn[[14]] <- lm(logZn ~ heatsubspdlpow100_1*heatsubAADTlog200, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[14]])
-#ols_plot_diagnostics(modlistlogZn[[14]])
-ols_coll_diag(modlistlogZn[[14]])
-ols_correlations(modlistlogZn[[14]])
-
-modlistlogZn[[15]] <- lm(logZn ~ heatsubspdlpow100_1*heatbing1902log300, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[15]])
-#ols_plot_diagnostics(modlistlogZn[[15]])
-ols_coll_diag(modlistlogZn[[15]])
-ols_correlations(modlistlogZn[[15]])
-
-modlistlogZn[[16]] <- lm(logZn ~ heatsubspdlpow100_1*heatbing1902log300 + nlcd_imp_ps, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[16]])
-#ols_plot_diagnostics(modlistlogZn[[16]])
-ols_coll_diag(modlistlogZn[[16]])
-ols_correlations(modlistlogZn[[16]])
-
-modlistlogZn[[17]] <- lm(logZn ~ heatsubspdlpow100_1 + heatbing1902log300 + nlcd_imp_ps, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[17]])
-#ols_plot_diagnostics(modlistlogZn[[17]])
-ols_coll_diag(modlistlogZn[[17]])
-ols_correlations(modlistlogZn[[17]])
-
-modlistlogZn[[18]] <- lm(logZn ~ heatsubspdlpow100_1*nlcd_imp_ps + heatbing1902log300,
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[18]])
-#ols_plot_diagnostics(modlistlogZn[[18]])
-ols_coll_diag(modlistlogZn[18])
-ols_correlations(modlistlogZn[[18]])
-
-modlistlogZn[[19]] <- lm(logZn ~ heatsubspdlpow100_1 + heatbing1902log300*nlcd_imp_ps_mean, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[19]])
-#ols_plot_diagnostics(modlistlogZn[[19]])
-ols_correlations(modlistlogZn[[19]])
-
-modlistlogZn[[20]] <- lm(logZn ~ heatsubspdlpow100_1 + heatbing1902log300*nlcd_imp_ps_mean + 
-                        heatbustransitlog200, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[20]])
-#ols_plot_diagnostics(modlistlogZn[[20]])
-ols_coll_diag(modlistlogZn[20])
-ols_correlations(modlistlogZn[[20]])
-
-modlistlogZn[[21]] <- lm(logZn ~ heatsubspdlpow100_1*heatbustransitlog200 + heatbing1902log300*nlcd_imp_ps_mean, 
-                      data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[21]])
-#ols_plot_diagnostics(modlistlogZn[[21]])
-ols_coll_diag(modlistlogZn[21])
-ols_correlations(modlistlogZn[[21]])
-
-modlistlogZn[[22]] <- lm(logZn ~ heatsubspdlpow100_1*heatbustransitlog200 + heatbing1902log300*nlcd_imp_ps, 
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[22]])
-#ols_plot_diagnostics(modlistlogZn[[22]])
-ols_coll_diag(modlistlogZn[22])
-ols_correlations(modlistlogZn[[22]])
-
-#------ 3. logZn - Transformed predictors --------
-modlistlogZn[[23]] <- lm(logZn ~ heatsubAADTlog200frt,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[23]])
-#ols_plot_diagnostics(modlistlogZn[[23]])
-ols_coll_diag(modlistlogZn[[23]])
-ols_correlations(modlistlogZn[[23]])
-
-modlistlogZn[[24]] <- lm(logZn ~ heatsubAADTlog100frt,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[24]])
-#ols_plot_diagnostics(modlistlogZn[[24]])
-ols_coll_diag(modlistlogZn[[24]])
-ols_correlations(modlistlogZn[[24]])
-
-modlistlogZn[[25]] <- lm(logZn ~ heatsubAADTlog300frt,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[25]])
-#ols_plot_diagnostics(modlistlogZn[[25]])
-ols_coll_diag(modlistlogZn[[25]])
-ols_correlations(modlistlogZn[[25]])
-
-modlistlogZn[[26]] <- lm(logZn ~ heatsubAADTpow100_1frt,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[26]])
-#ols_plot_diagnostics(modlistlogZn[[26]])
-ols_coll_diag(modlistlogZn[[26]])
-ols_correlations(modlistlogZn[[26]])
-
-modlistlogZn[[27]] <- lm(logZn ~ heatsubAADTlog100frt + heatsubspdlpow100_1,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[27]])
-#ols_plot_diagnostics(modlistlogZn[[27]])
-ols_coll_diag(modlistlogZn[[27]])
-ols_correlations(modlistlogZn[[27]])
-
-modlistlogZn[[28]] <- lm(logZn ~ heatsubAADTlog100frt*heatsubspdlpow100_1,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[28]])
-#ols_plot_diagnostics(modlistlogZn[[28]])
-ols_coll_diag(modlistlogZn[[28]])
-ols_correlations(modlistlogZn[[28]])
-
-modlistlogZn[[29]] <- lm(logZn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[29]])
-#ols_plot_diagnostics(modlistlogZn[[29]])
-ols_coll_diag(modlistlogZn[[29]])
-ols_correlations(modlistlogZn[[29]])
-
-modlistlogZn[[30]] <- lm(logZn ~ heatsubAADTlog100frt*nlcd_imp_ps_mean,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[30]])
-#ols_plot_diagnostics(modlistlogZn[[30]])
-ols_coll_diag(modlistlogZn[[30]])
-ols_correlations(modlistlogZn[[30]])
-
-modlistlogZn[[31]] <- lm(logZn ~ heatsubAADTlog100frt*nlcd_imp_ps_mean + heatbing1902log300,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[31]])
-#ols_plot_diagnostics(modlistlogZn[[31]])
-ols_coll_diag(modlistlogZn[[31]])
-ols_correlations(modlistlogZn[[31]])
-
-modlistlogZn[[32]] <- lm(logZn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean + heatbing1902log300,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[32]])
-#ols_plot_diagnostics(modlistlogZn[[32]])
-ols_coll_diag(modlistlogZn[[32]])
-ols_correlations(modlistlogZn[[32]])
-
-modlistlogZn[[33]] <- lm(logZn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean*heatbing1902log300,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[33]])
-ols_plot_diagnostics(modlistlogZn[[33]])
-ols_coll_diag(modlistlogZn[[33]])
-ols_correlations(modlistlogZn[[33]])
-plot_model(modlistlogZn[[33]], type='int', mdrt.values = 'meansd')
-
-modlistlogZn[[34]] <- lm(logZn ~ heatsubAADTlog100frt + heatbustransitlog200 + nlcd_imp_ps_mean + heatbing1902log300,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[34]])
-#ols_plot_diagnostics(modlistlogZn[[34]])
-ols_coll_diag(modlistlogZn[[34]])
-ols_correlations(modlistlogZn[[34]])
-
-modlistlogZn[[35]] <- lm(logZn ~ heatsubAADTlog100frt + heatbustransitlog200 + nlcd_imp_ps_mean + heatbing1902log300 +
-                           heatsubslopepow500_1,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[35]])
-#ols_plot_diagnostics(modlistlogZn[[35]])
-ols_coll_diag(modlistlogZn[[35]])
-ols_correlations(modlistlogZn[[35]])
-
-modlistlogZn[[36]] <- lm(logZn ~ heatsubAADTlog100frt*heatsubslopepow500_1 +
-                           heatbustransitlog200 + nlcd_imp_ps_mean + heatbing1902log300,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[36]])
-#ols_plot_diagnostics(modlistlogZn[[36]])
-ols_coll_diag(modlistlogZn[[36]])
-ols_correlations(modlistlogZn[[36]])
-
-modlistlogZn[[37]] <- lm(logZn ~ heatsubAADTlog100frt*heatbustransitlog200 + nlcd_imp_ps_mean + heatbing1902log300,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[37]])
-#ols_plot_diagnostics(modlistlogZn[[37]])
-ols_coll_diag(modlistlogZn[[37]])
-ols_correlations(modlistlogZn[[37]])
-
-modlistlogZn[[38]] <- lm(logZn ~ heatsubAADTlog100frt*heatbustransitlog200 + heatsubspdllog100 + 
-                           nlcd_imp_ps_mean + heatbing1902log300,
-                         data = pollutfieldclean_cast)
-ols_regress(modlistlogZn[[38]])
-#ols_plot_diagnostics(modlistlogZn[[38]])
-ols_coll_diag(modlistlogZn[[38]])
-ols_correlations(modlistlogZn[[38]])
-
-#------ 4. log(Zn) - Make latex model summary table ----
-model_summarylogZn<- as.data.table(
-  ldply(modlistlogZn, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
-setorder(model_summarylogZn, -R2pred, AICc)  
-cat(latex_format(model_summarylogZn), file = file.path(moddir, 'modeltable_logZn_2019.tex'))
-setwd(moddir)
-texi2pdf('modeltable_logZn_2019.tex')
-
-#Could add Synthetic index ~ PC or Individual pollutants ~ PC but could just add difficulty
-#------ 5. log(Zn) - Make latex model summary table when excluding outliers ----
-vnum <- max(sapply(modlistlogZn, function(mod) {length(mod$coefficients)}))
-model_summarylogZn_nooutliers<- as.data.table(
-  ldply(modlistlogZn, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50,
-                                                             remove_outliers = 'outliers',
-                                                             labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)])}))
-setorder(model_summarylogZn_nooutliers, -R2pred, AICc)  
-cat(latex_format(model_summarylogZn_nooutliers), file = file.path(moddir, 'modeltable_logZn_nooutliers_2019.tex'))
-setwd(moddir)
-texi2pdf('modeltable_logZn_nooutliers_2019.tex')
-
-#------ 6. GLM Zn - run all models for table ----
+#------ 5. GLM Zn - run all models for table ----
 modlistglmZn <- list()
 
 modlistglmZn[[1]] <- glm(Zn ~ 1,
@@ -2948,7 +2662,7 @@ modlistglmZn[[1]] <- glm(Zn ~ 1,
 
 modlistglmZn[[2]] <- glm(Zn ~ heatsubAADTlog200,
                         data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-modlistglmZn[[3]] <- glm(Zn ~ heatbing1902log300,
+modlistglmZn[[3]] <- glm(Zn ~ heatbing1902log300proj,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 modlistglmZn[[4]] <- glm(Zn ~ nlcd_imp_ps_mean,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
@@ -2958,54 +2672,54 @@ modlistglmZn[[5]] <- glm(Zn ~ nlcd_imp_ps,
 modlistglmZn[[6]] <- glm(Zn ~ heatbustransitlog200,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[7]] <- glm(Zn ~ heatsubspdlpow100_1,
+modlistglmZn[[7]] <- glm(Zn ~ heatsubspdlpow100_3,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[8]] <- glm(Zn ~ heatsubslopepow500_1,
+modlistglmZn[[8]] <- glm(Zn ~ heatsubslopepow500_3,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[9]] <- glm(Zn ~ heatsubspdlpow100_1,
+modlistglmZn[[9]] <- glm(Zn ~ heatsubspdlpow100_3,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[10]] <- glm(Zn ~ heatsubspdlpow100_1 + heatsubAADTlog200,
+modlistglmZn[[10]] <- glm(Zn ~ heatsubspdlpow100_3 + heatsubAADTlog200,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[11]] <- glm(Zn ~ heatsubspdlpow100_1 + heatbing1902log300,
+modlistglmZn[[11]] <- glm(Zn ~ heatsubspdlpow100_3+ heatbing1902log300proj,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[12]] <- glm(Zn ~ heatsubspdlpow100_1 + nlcd_imp_ps_mean,
+modlistglmZn[[12]] <- glm(Zn ~ heatsubspdlpow100_3 + nlcd_imp_ps_mean,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[13]] <- glm(Zn ~ heatsubspdlpow100_1 + heatbustransitlog200,
+modlistglmZn[[13]] <- glm(Zn ~ heatsubspdlpow100_3 + heatbustransitlog200,
                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[14]] <- glm(Zn ~ heatsubspdlpow100_1 + heatsubslopepow500_1,
+modlistglmZn[[14]] <- glm(Zn ~ heatsubspdlpow100_3 + heatsubslopepow500_1,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[15]] <- glm(Zn ~ heatsubspdlpow100_1*heatsubAADTlog200,
-                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-
-
-modlistglmZn[[16]] <- glm(Zn ~ heatsubspdlpow100_1*heatbing1902log300,
-                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-
-modlistglmZn[[17]] <- glm(Zn ~ heatsubspdlpow100_1*heatbing1902log300 + nlcd_imp_ps_mean,
-                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-
-modlistglmZn[[18]] <- glm(Zn ~ heatsubspdlpow100_1*nlcd_imp_ps_mean + heatbing1902log300,
-                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-
-modlistglmZn[[19]] <- glm(Zn ~ heatsubspdlpow100_1 + heatbing1902log300*nlcd_imp_ps_mean,
-                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-
-modlistglmZn[[20]] <- glm(Zn ~ heatsubspdlpow100_1 + heatbing1902log300*nlcd_imp_ps_mean + heatbustransitlog200,
-                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-
-modlistglmZn[[21]] <- glm(Zn ~ heatsubspdlpow100_1*heatbustransitlog200 + heatbing1902log300*nlcd_imp_ps_mean,
+modlistglmZn[[15]] <- glm(Zn ~ heatsubspdlpow100_3*heatsubAADTlog200,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
 
-modlistglmZn[[22]] <- glm(Zn ~ heatsubspdlpow100_1*heatbustransitlog200 + heatbing1902log300*nlcd_imp_ps,
+modlistglmZn[[16]] <- glm(Zn ~ heatsubspdlpow100_3*heatbing1902log300proj,
+                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
+
+modlistglmZn[[17]] <- glm(Zn ~ heatsubspdlpow100_3*heatbing1902log300proj + nlcd_imp_ps_mean,
+                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
+
+modlistglmZn[[18]] <- glm(Zn ~ heatsubspdlpow100_3*nlcd_imp_ps_mean + heatbing1902log300proj,
+                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
+
+modlistglmZn[[19]] <- glm(Zn ~ heatsubspdlpow100_3 + heatbing1902log300proj*nlcd_imp_ps_mean,
+                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
+
+modlistglmZn[[20]] <- glm(Zn ~ heatsubspdlpow100_3 + heatbing1902log300proj*nlcd_imp_ps_mean + heatbustransitlog200,
+                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
+
+modlistglmZn[[21]] <- glm(Zn ~ heatsubspdlpow100_3*heatbustransitlog200 + heatbing1902log300proj*nlcd_imp_ps_mean,
+                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
+
+
+modlistglmZn[[22]] <- glm(Zn ~ heatsubspdlpow100_3*heatbustransitlog200 + heatbing1902log300proj*nlcd_imp_ps,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
 modlistglmZn[[23]] <- glm(Zn ~ heatsubAADTlog200frt,
@@ -3021,10 +2735,13 @@ modlistglmZn[[25]] <- glm(Zn ~ heatsubAADTlog300frt,
 modlistglmZn[[26]] <- glm(Zn ~ heatsubAADTpow100_1frt,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[27]] <- glm(Zn ~ heatsubAADTlog100frt + heatsubspdlpow100_1,
+modlistglmZn[[27]] <- glm(Zn ~ heatsubAADTlog100frt + heatsubspdlpow100_3,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[28]] <- glm(Zn ~ heatsubAADTlog100frt*heatsubspdlpow100_1,
+modlistglmZn[[28]] <- glm(Zn ~ heatsubAADTlog100frt*heatsubspdlpow100_3,
+                          data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
+
+modlistglmZn[[29]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
 modlistglmZn[[29]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean,
@@ -3033,79 +2750,47 @@ modlistglmZn[[29]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean,
 modlistglmZn[[30]] <- glm(Zn ~ heatsubAADTlog100frt*nlcd_imp_ps_mean,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[31]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean + heatbing1902log300,
+modlistglmZn[[31]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean + heatbing1902log300proj,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[32]] <- glm(Zn ~ heatsubAADTlog100frt*nlcd_imp_ps_mean + heatbing1902log300,
+modlistglmZn[[32]] <- glm(Zn ~ heatsubAADTlog100frt*nlcd_imp_ps_mean + heatbing1902log300proj,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[33]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean*heatbing1902log300,
+modlistglmZn[[33]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean*heatbing1902log300proj,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[34]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean + heatbing1902log300 + heatbustransitlog200,
+modlistglmZn[[34]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean + heatbing1902log300proj + heatbustransitlog200,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[35]] <- glm(Zn ~ heatsubAADTlog100frt*heatsubslopepow500_1 + nlcd_imp_ps_mean + heatbing1902log300,
+modlistglmZn[[35]] <- glm(Zn ~ heatsubAADTlog100frt*heatsubslopepow500_1 + nlcd_imp_ps_mean + heatbing1902log300proj,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-modlistglmZn[[36]] <- glm(Zn ~ heatsubAADTlog100frt*heatbustransitlog200 + nlcd_imp_ps_mean + heatbing1902log300,
+modlistglmZn[[36]] <- glm(Zn ~ heatsubAADTlog100frt*heatbustransitlog200 + nlcd_imp_ps_mean + heatbing1902log300proj,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
 modlistglmZn[[37]] <- glm(Zn ~ heatsubAADTlog100frt*heatbustransitlog200 + heatsubspdllog100 + 
-                            nlcd_imp_ps_mean + heatbing1902log300,
+                            nlcd_imp_ps_mean + heatbing1902log300proj,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-#------ 7. GLM Zn - test selected model ----
-modlistglmZn[[32]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean + heatbing1902log300,
+modlistglmZn[[38]] <- glm(Zn ~ heatsubAADTlog100frt + heatbustransitlog200 + nlcd_imp_ps_mean,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-GAMrescheck(modlistglmZn[[32]])
-regdiagnostic_customtab(mod=modlistglmZn[[32]], maxpar=vnum, kCV = TRUE, k=10, cvreps=50)
-MAPE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[32]]))
-MAE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[32]]))
-RMSE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[32]]))
-
-plot_model(modlistglmZn[[32]], type='pred', mdrt.values = 'meansd')
-
-modlistglmZn[[33]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean*heatbing1902log300,
-                         data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-
-GAMrescheck(modlistglmZn[[33]])
-regdiagnostic_customtab(mod=modlistglmZn[[33]], maxpar=vnum, kCV = TRUE, k=10, cvreps=50)
-MAPE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[33]]))
-MAE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[33]]))
-RMSE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[33]]))
-
-plot_model(modlistglmZn[[33]], type='int', mdrt.values = 'meansd')
-plot_model(modlistglmZn[[33]], type='pred', mdrt.values = 'meansd')
-
-modlistglmZn[[34]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean*heatbing1902log300 + heatbustransitlog200,
+modlistglmZn[[39]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean + heatbing1902log500proj,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-GAMrescheck(modlistglmZn[[34]])
-plot(modlistglmZn[[34]])
-regdiagnostic_customtab(mod=modlistglmZn[[34]], maxpar=vnum, kCV = TRUE, k=10, cvreps=50)
-MAPE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[34]]))
-MAE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[34]]))
-RMSE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[34]]))
 
-plot_model(modlistglmZn[[34]], type='int', mdrt.values = 'meansd')
-plot_model(modlistglmZn[[34]], type='pred', mdrt.values = 'meansd')
-
-modlistglmZn[[35]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean*heatbing1902log300 + heatbustransitlog200 +
-                            heatsubslopepow500_1,
+modlistglmZn[[40]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean*heatbing1902log500proj,
                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
-GAMrescheck(modlistglmZn[[35]])
-VIF(modlistglmZn[[35]])
-plot(modlistglmZn[[35]])
-regdiagnostic_customtab(mod=modlistglmZn[[35]], maxpar=vnum, kCV = TRUE, k=10, cvreps=50)
-MAPE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[35]]))
-MAE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[35]]))
-RMSE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[35]]))
 
-plot_model(modlistglmZn[[35]], type='int', mdrt.values = 'meansd')
-plot_model(modlistglmZn[[35]], type='pred', mdrt.values = 'meansd')
+# modlistglmZn[[41]] <- glm(Zn ~ heatsubAADTlog100frt + nlcd_imp_ps_mean + NLCD_reclass_final_PS_edit,
+#                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
+# 
+# modlistglmZn[[42]] <- glm(Zn ~ heatsubAADTlog100frt + heatbing1902log500proj + NLCD_reclass_final_PS_edit,
+#                           data = pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),], family=Gamma(link='log'))
 
-#------ 8. GLM Zn - Make latex model summary table ----
+
+#------ 6. GLM Zn - Make latex model summary table ----
+vnum <- max(sapply(modlistglmZn, function(mod) {length(mod$coefficients)}))
+
 model_summaryglmZn<- as.data.table(
   ldply(modlistglmZn, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
 model_summaryglmZn[, AICc := as.numeric(AICc)]
@@ -3132,36 +2817,67 @@ texi2pdf('modeltable_glmZn_2019.tex')
 
 texi2pdf('modeltable_glmZn_2019edit.tex')
 
-#------ 1. GAM Zn - Single parameter models -------
-GAMrescheck <- function(model) {
-  print(summary(model))
-  print(paste0("AICc:", AICc(model)))
-  par(mfrow=c(2,2))
-  gam.check(model)
-  par(mfrow=c(1,1))
-}
+#------ 7. GLM Zn - test selected model ----
+summary(modlistglmZn[[29]])
+GAMrescheck(modlistglmZn[[29]])
+regdiagnostic_customtab(mod=modlistglmZn[[29]], maxpar=vnum, kCV = TRUE, k=10, cvreps=50)
+MAPE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[29]]))
+MAE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[29]]))
+RMSE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[29]]))
 
-GAMmultiplot <- function(model) {
-  pdim <- ceiling(sqrt(length(attr(model$terms, "term.labels"))))
-  par(mfrow=c(pdim, pdim))
-  plot(model,residuals=TRUE,shade=T, cex=6)
-  par(mfrow=c(1,1))
-}
+qplot(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), heatbustransitlog200],
+      modlistglmZn[[29]]$residuals) + 
+  geom_smooth(method='lm', color='red')
 
-GAMinfluence <- function(mgcvmodel, data) {
-  gamite <- ldply(1:nrow(data), function(index) {
-    subdat <- data[-index,]
-    submod <- mgcv::gam(formula = mgcvmodel$formula, family=mgcvmodel$family, data=subdat)
-    influence <- sum((fitted(mgcvmodel)[-index] - fitted(submod))^2)
-    return(cbind(data[index, 'SiteIDPair'], influence))
-  })
-  return(gamite)
-}
+qplot(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), heatbing1902log500proj],
+      modlistglmZn[[29]]$residuals) + 
+  geom_smooth(method='lm', color='red')
 
+qplot(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), NLCD_reclass_final_PS],
+      modlistglmZn[[29]]$residuals) + 
+  geom_smooth(method='lm', color='red')
+
+
+summary(modlistglmZn[[38]])
+GAMrescheck(modlistglmZn[[38]])
+regdiagnostic_customtab(mod=modlistglmZn[[38]], maxpar=vnum, kCV = TRUE, k=10, cvreps=50)
+MAPE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[38]]))
+MAE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[38]]))
+RMSE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn], fitted(modlistglmZn[[38]]))
+
+qplot(abs(fitted(modlistglmZn[[29]])-pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn]), 
+      abs(fitted(modlistglmZn[[38]])-pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn])) + 
+  geom_abline(slope=1) + 
+  labs(x='Absolute error for model 29 - aadt10frt + nlcd', 
+       y='Absolute error for model 38 - aadt100frt + nlcd + transit200')
+
+
+GAMrescheck(modlistglmZn[[39]])
+qplot(abs(fitted(modlistglmZn[[29]])-pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn]), 
+      abs(fitted(modlistglmZn[[39]])-pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Zn])) + 
+  geom_abline(slope=1) + 
+  labs(x='Absolute error for model 29 - aadt100frt + nlcd', 
+       y='Absolute error for model 39 - aadt100frt + nlcd + bing500')
+
+# plot_model(modlistglmZn[[33]], type='int', mdrt.values = 'meansd') +
+#   scale_x_continuous(name = 'Imperviousness (%)', expand = c(0,0)) +
+#   scale_y_continuous(name = 'Zn index', expand=c(0,0), 
+#                      breaks = c(0,0.25, 0.5, 0.75, 1.0), labels = c(0, 25, 50, 75, 100)) +
+#   coord_cartesian(xlim=c(0,100), ylim=c(0,1)) +
+#   theme_classic() +
+#   theme(plot.title=element_blank(),
+#         plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm"),
+#         legend.position = c(0.8, 0.2), 
+#         text =element_text(size=14))
+
+
+#plot_model(modlistglmZn[[33]], type='pred', mdrt.values = 'meansd')
+
+#------ 8. GAM Zn - Single parameter models -------
 modlistGAMZn <- list() #List to hold models
 modlistGAMZn[[1]] <- lm(logZn ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
 
-modlistGAMZn[[2]] <- mgcv::gam(Zn~s(heatsubAADTlog200, k=4), family=gaussian(link='log'), method='ML',
+modlistGAMZn[[2]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4), family=gaussian(link='log'), method='ML',
                                data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[2]])
 plot(modlistGAMZn[[2]],residuals=TRUE,shade=T, cex=6)
@@ -3171,7 +2887,7 @@ ggplot(pollutfieldclean_cast, aes(x=heatsubAADTlog200, y=log(Zn), label=paste0(S
   geom_text() + 
   geom_line(aes(y=predgamZn))
 
-modlistGAMZn[[3]] <- mgcv::gam(Zn~s(heatsubAADTlog200, k=4), family=Gamma(link='log'), method='ML',
+modlistGAMZn[[3]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4), family=Gamma(link='log'), method='ML',
                               data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[3]])
 plot(modlistGAMZn[[3]],residuals=TRUE,shade=T, cex=6)
@@ -3182,20 +2898,19 @@ ggplot(pollutfieldclean_cast, aes(x=heatsubAADTlog200, y=log(Zn), label=paste0(S
   geom_line(aes(y=predgamZn), color='red', size=1.2) +
   theme_classic()
 
-modlistGAMZn[[4]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4), family=gaussian(link='log'), data=pollutfieldclean_cast)
+modlistGAMZn[[4]] <- mgcv::gam(Zn~s(heatsubAADTlog200, k=4), family=gaussian(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[4]])
 plot(modlistGAMZn[[4]],residuals=TRUE,shade=T, cex=6)
 
-modlistGAMZn[[5]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4), family=Gamma(link='log'), data=pollutfieldclean_cast)
+modlistGAMZn[[5]] <- mgcv::gam(Zn~s(heatsubAADTlog200, k=4), family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[5]])
 plot(modlistGAMZn[[5]],residuals=TRUE,shade=T, cex=6)
 
-modlistGAMZn[[6]] <- mgcv::gam(Zn~s(heatsubspdlpow100_1), 
-                               family=gaussian(link='log'), data=pollutfieldclean_cast)
-GAMrescheck(modlistGAMZn[[5]])
-plot(modlistGAMZn[[5]],residuals=TRUE,shade=T, cex=6)
+modlistGAMZn[[6]] <- mgcv::gam(Zn~s(heatsubspdlpow100_3, k=4), family=gaussian(link='log'), data=pollutfieldclean_cast)
+GAMrescheck(modlistGAMZn[[6]])
+plot(modlistGAMZn[[6]],residuals=TRUE,shade=T, cex=6)
 
-modlistGAMZn[[7]] <- mgcv::gam(Zn~s(heatbing1902log300, k=4), 
+modlistGAMZn[[7]] <- mgcv::gam(Zn~s(heatbing1902log300proj, k=4), 
                                family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[7]])
 plot(modlistGAMZn[[7]],residuals=TRUE,shade=T, cex=6)
@@ -3210,20 +2925,25 @@ modlistGAMZn[[9]] <- mgcv::gam(Zn~s(nlcd_imp_ps, k=3),
 GAMrescheck(modlistGAMZn[[9]])
 plot(modlistGAMZn[[9]],residuals=TRUE,shade=T, cex=6)
 
-modlistGAMZn[[9]] <- mgcv::gam(Zn~s(heatsubslopepow500_1, k=4), 
-                               family=Gamma(link='log'), data=pollutfieldclean_cast)
-GAMrescheck(modlistGAMZn[[9]])
-plot(modlistGAMZn[[9]],residuals=TRUE,shade=T, cex=6)
-
-modlistGAMZn[[10]] <- mgcv::gam(Zn~s(heatbing1902log500, k=4), 
+modlistGAMZn[[10]] <- mgcv::gam(Zn~s(nlcd_imp_ps_mean, k=3), 
                                family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[10]])
 plot(modlistGAMZn[[10]],residuals=TRUE,shade=T, cex=6)
 
-#------ 2. GAM Zn - Multiparameter models -------
-modlistGAMZn[[11]] <- mgcv::gam(Zn~s(heatsubAADTlog100thd, k=4) + s(nlcd_imp_ps, k=3),
+modlistGAMZn[[11]] <- mgcv::gam(Zn~s(heatsubslopepow500_1, k=4), 
+                               family=Gamma(link='log'), data=pollutfieldclean_cast)
+GAMrescheck(modlistGAMZn[[11]])
+plot(modlistGAMZn[[11]],residuals=TRUE,shade=T, cex=6)
+
+modlistGAMZn[[12]] <- mgcv::gam(Zn~s(heatbing1902log500proj, k=4), 
+                               family=Gamma(link='log'), data=pollutfieldclean_cast)
+GAMrescheck(modlistGAMZn[[12]])
+plot(modlistGAMZn[[12]],residuals=TRUE,shade=T, cex=6)
+
+#------ 9. GAM Zn - Multiparameter models -------
+modlistGAMZn[[11]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(nlcd_imp_ps_mean, k=3),
                                 family=Gamma(link='log'), 
-                                data=pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),],
+                                data=pollutfieldclean_cast,
                                 select=TRUE)
 GAMrescheck(modlistGAMZn[[11]])
 GAMmultiplot(modlistGAMZn[[11]])
@@ -3233,42 +2953,43 @@ pollutfieldclean_cast[, predgamZn := fitted(modlistGAMZn[[11]], type='response')
 ggplot(pollutfieldclean_cast, aes(x=predgamZn, y=Zn, label=paste0(SiteID, Pair))) + 
   geom_text() +
   geom_abline(intercept=0, slope=1) +
-  scale_x_continuous(limits=c(0,2)) +
+  #scale_x_continuous(limits=c(0,2)) +
   coord_fixed()
 
-modlistGAMZn[[12]] <- mgcv::gam(Zn~s(heatsubAADTlog100thd) + s(heatsubAADTlog100thd, k=4, by=nlcd_imp_ps_mean) + s(nlcd_imp_ps, k=3), 
+modlistGAMZn[[12]] <- mgcv::gam(Zn~s(heatsubAADTlog100thd) + s(heatsubAADTlog100thd, k=4, by=nlcd_imp_ps_mean) + 
+                                  s(nlcd_imp_ps, k=3), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[12]])
 GAMmultiplot(modlistGAMZn[[12]])
 
 
-modlistGAMZn[[13]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(nlcd_imp_ps, k=3) + s(heatbing1902log300, k=4), 
+modlistGAMZn[[13]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(nlcd_imp_ps_mean, k=3) + s(heatbing1902log300proj, k=4), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[13]])
 GAMmultiplot(modlistGAMZn[[13]])
 concurvity(modlistGAMZn[[13]])
 
-modlistGAMZn[[14]] <- mgcv::gam(Zn~s(heatsubAADTlog100,k=4) + s(heatsubAADTlog100, k=4, by=heatbing1902log500) + 
+modlistGAMZn[[14]] <- mgcv::gam(Zn~s(heatsubAADTlog100,k=4) + s(heatsubAADTlog100, k=4, by=heatbing1902log500proj) + 
                                   s(nlcd_imp_ps, k=3), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[14]])
 GAMmultiplot(modlistGAMZn[[14]])
 
-modlistGAMZn[[15]] <- mgcv::gam(Zn~s(heatsubAADTlog100thd,k=4) + s(nlcd_imp_ps, k=3) + s(heatbustransitlog200), 
+modlistGAMZn[[15]] <- mgcv::gam(Zn~s(heatsubAADTlog100thd,k=4) + s(nlcd_imp_ps_mean, k=3) + s(heatbustransitlog200), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[15]])
 GAMmultiplot(modlistGAMZn[[15]])
 #Plot
 #Plot
 
-modlistGAMZn[[16]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(heatsubspdlpow100_1, k=4)+ 
-                                  s(nlcd_imp_ps, k=3) + s(heatbustransitlog200), 
+modlistGAMZn[[16]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(heatsubspdlpow100_3, k=4)+ 
+                                  s(nlcd_imp_ps_mean, k=3) + s(heatbustransitlog200), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[16]])
 GAMmultiplot(modlistGAMZn[[16]])
 
-modlistGAMZn[[17]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(heatsubAADTlog100, k=4, by=heatsubspdlpow100_1)+ 
-                                  s(nlcd_imp_ps, k=3) + s(heatbustransitlog200), 
+modlistGAMZn[[17]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(heatsubAADTlog100, k=4, by=heatsubspdlpow100_3)+ 
+                                  s(nlcd_imp_ps_mean, k=3) + s(heatbustransitlog200), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[17]])
 GAMmultiplot(modlistGAMZn[[17]])
@@ -3281,132 +3002,115 @@ ggplot(pollutfieldclean_cast, aes(x=predgamZn, y=Zn, label=paste0(SiteID, Pair))
   scale_x_continuous(limits=c(0,2)) +
   coord_fixed()
 
-modlistGAMZn[[18]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(nlcd_imp_ps, k=3) + s(heatbustransitlog200) +
+modlistGAMZn[[18]] <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(nlcd_imp_ps_mean, k=3) + s(heatbustransitlog200) +
                                   s(heatsubAADTlog100, k=4, by=heatsubslopepow500_1), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[18]])
 GAMmultiplot(modlistGAMZn[[18]])
 concurvity(modlistGAMZn[[18]])
 
-modlistGAMZn[[19]] <- mgcv::gam(Zn~s(heatsubAADTlog100thd,k=4) + s(nlcd_imp_ps, k=3) + s(heatbustransitlog200, k=4) +
-                                  s(heatbing1902log500, k=3), 
+modlistGAMZn[[19]] <- mgcv::gam(Zn~s(heatsubAADTlog100thd,k=4) + s(nlcd_imp_ps_mean, k=3) + s(heatbustransitlog200, k=4) +
+                                  s(heatbing1902log500proj, k=3), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[19]])
 GAMmultiplot(modlistGAMZn[[19]])
 concurvity(modlistGAMZn[[19]])
 
 modlistGAMZn[[20]] <- mgcv::gam(Zn~s(heatsubAADTlog100thd,k=4) + s(nlcd_imp_ps_mean, k=3) + s(heatbustransitlog300, k=4) +
-                                  s(heatbing1902log500, k=3), 
+                                  s(heatbing1902log500proj, k=3), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast[])
 GAMrescheck(modlistGAMZn[[20]])
 GAMmultiplot(modlistGAMZn[[20]])
 concurvity(modlistGAMZn[[20]])
 
-modlistGAMZn[[21]] <- mgcv::gam(Zn~s(heatsubspdllog100,k=4) + s(nlcd_imp_ps, k=3) + s(heatbustransitlog200), 
+modlistGAMZn[[21]] <- mgcv::gam(Zn~s(heatsubspdllog100,k=4) + s(nlcd_imp_ps_mean, k=3) + s(heatbustransitlog200), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast)
 GAMrescheck(modlistGAMZn[[21]])
 GAMmultiplot(modlistGAMZn[[21]])
 concurvity(modlistGAMZn[[21]])
 
-#------ 3. GAM Zn - Multiparameter models without Luwam data or 15th Ave outliers -------
-GAMZn_sub13 <- mgcv::gam(Zn~s(heatsubAADTlog100thd, k=4) + s(nlcd_imp_ps, k=3) + s(heatbing1902log300, k=4), 
+#------ 10. GAM Zn - Multiparameter models without Luwam data or 15th Ave outliers -------
+GAMZn_sub11 <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(nlcd_imp_ps_mean, k=3), 
+                         family=Gamma(link='log'), data=pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),])
+GAMrescheck(GAMZn_sub11)
+GAMmultiplot(GAMZn_sub11)
+concurvity(GAMZn_sub11)
+
+GAMZn_sub13 <- mgcv::gam(Zn~s(heatsubAADTlog100, k=4) + s(nlcd_imp_ps_mean, k=3) + s(heatbing1902log300proj, k=4), 
                                 family=Gamma(link='log'), data=pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),])
 GAMrescheck(GAMZn_sub13)
 GAMmultiplot(GAMZn_sub13)
 concurvity(GAMZn_sub13)
 
-GAMZn_sub20 <- mgcv::gam(Zn~s(heatsubAADTlog100thd,k=3) + s(nlcd_imp_ps, k=3) + s(heatbustransitlog200), 
+GAMZn_sub20 <- mgcv::gam(Zn~s(heatsubAADTlog100,k=4) + s(nlcd_imp_ps_mean, k=3) + s(heatbustransitlog200), 
                          family=Gamma(link='log'),data=pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),])
 GAMrescheck(GAMZn_sub20)
 GAMmultiplot(GAMZn_sub20)
 
-#------ 3. GAM Zn - Multiparameter models without outliers based on influence-------
-#Model 15
-influencemod15 <- GAMinfluence(modlistGAMZn[[15]], pollutfieldclean_cast)
+#------ 11. GAM Zn - Multiparameter models without outliers based on influence-------
+#Model 11
+influencemod11 <- GAMinfluence(modlistGAMZn[[11]], pollutfieldclean_cast)
 
-ggplot(pollutfieldclean_cast, aes(x=fitted(modlistGAMZn[[15]]), y=Zn, 
-                                  color=influencemod10$influence, label=SiteIDPair)) + 
+ggplot(pollutfieldclean_cast, aes(x=fitted(modlistGAMZn[[11]]), y=Zn, 
+                                  color=influencemod11$influence, label=SiteIDPair)) + 
   geom_text() +
   scale_color_distiller(palette='Spectral')
-ggplot(influencemod10, aes(x=influence, label=SiteIDPair)) + 
+ggplot(influencemod11, aes(x=influence, label=SiteIDPair)) + 
   geom_histogram()
 pollutfieldclean_cast[!(SiteIDPair %in% 
-                          influencemod10[influencemod10$influence>0.03, 'SiteIDPair'])]
+                          influencemod11[influencemod11$influence>0.04, 'SiteIDPair'])]
 
-GAMZn_sub15 <- mgcv::gam(Zn~s(heatsubAADTlog100,k=3) + s(nlcd_imp_ps, k=3) + s(heatbustransitlog200), 
+GAMZn_sub11 <- mgcv::gam(Zn~s(heatsubAADTlog100,k=4) + s(nlcd_imp_ps_mean, k=3), 
                          family=Gamma(link='log'), 
                          data=pollutfieldclean_cast[!(SiteIDPair %in% 
-                                                        influencemod10[influencemod10$influence>0.03, 'SiteIDPair']),])
-GAMrescheck(GAMZn_sub15)
-GAMmultiplot(GAMZn_sub15)
-GAMrescheck(modlistGAMZn[[15]])
-
-#Model 20
-influencemod20 <- GAMinfluence(modlistGAMZn[[20]], pollutfieldclean_cast)
-
-ggplot(pollutfieldclean_cast, aes(x=fitted(modlistGAMZn[[20]]), y=Zn, 
-                                  color=influencemod10$influence, label=SiteIDPair)) + 
-  geom_text() +
-  scale_color_distiller(palette='Spectral')
-ggplot(influencemod10, aes(x=influence, label=SiteIDPair)) + 
-  geom_histogram()
-pollutfieldclean_cast[(SiteIDPair %in% 
-                          influencemod10[influencemod10$influence>0.015, 'SiteIDPair']), SiteIDPair]
-
-GAMZn_sub20 <- mgcv::gam(Zn~s(heatsubAADTlog100,k=3) + s(nlcd_imp_ps, k=3) + s(heatbustransitlog200), 
-                         family=Gamma(link='log'), 
-                         data=pollutfieldclean_cast[!(SiteIDPair %in% 
-                                                        influencemod10[influencemod10$influence>0.015, 'SiteIDPair']),])
-GAMrescheck(GAMZn_sub20)
-GAMmultiplot(GAMZn_sub20)
-GAMrescheck(modlistGAMZn[[20]])
+                                                        influencemod11[influencemod11$influence>0.04, 'SiteIDPair']),])
+GAMrescheck(GAMZn_sub11)
+GAMmultiplot(GAMZn_sub11)
+GAMrescheck(modlistGAMZn[[11]])
 
 #-------12. Zn - Compare final selected models -------
-#model 33 with logZn transformed predictors
-mod33_nooutliers <- regdiagnostic_customtab(modlistglmZn[[33]], maxpar=vnum, 
+
+mod29_nooutliers <- regdiagnostic_customtab(modlistglmZn[[29]], maxpar=vnum, 
                                             remove_outliers = 'outliers',
                                             labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)],
                                             kCV = TRUE, k=10, cvreps=50)
 #Determined by deleted studentized residuals
-subdat33 <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
-                                    strsplit(gsub('\\\\', '', mod33_nooutliers['outliers']), ',')$outliers),]
+subdat29 <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
+                                    strsplit(gsub('\\\\', '', mod29_nooutliers['outliers']), ',')$outliers),]
 #Simply excluding 15th Ave bus stop and Luwam's data
-subdat33_2 <- pollutfieldclean_cast[!(paste0(SiteIDPair) %in% extraoutliers),]
+subdat29_2 <- pollutfieldclean_cast[!(paste0(SiteIDPair) %in% extraoutliers),]
   
-mod33_nooutliersub <- glm(Zn ~  heatsubAADTlog100frt + nlcd_imp_ps_mean*heatbing1902log300, 
-                         data = subdat33_2, family=Gamma('log'))
-GAMrescheck(mod33_nooutliersub)
-plot(mod33_nooutliersub)
+mod29_nooutliersub <- glm(Zn ~  heatsubAADTlog100frt + nlcd_imp_ps_mean, 
+                         data = subdat29_2, family=Gamma('log'))
+GAMrescheck(mod29_nooutliersub)
+plot(mod29_nooutliersub)
 #Plot
 #Plot
 #Plot
 #Plot
-MAPE(subdat33_2[, Zn], fitted(mod33_nooutliersub))
-MAE(subdat33_2[, Zn], fitted(mod33_nooutliersub))
-RMSE(subdat33_2[, Zn], fitted(mod33_nooutliersub))
+MAPE(subdat29_2[, Zn], fitted(mod29_nooutliersub))
+MAE(subdat29_2[, Zn], fitted(mod29_nooutliersub))
+RMSE(subdat29_2[, Zn], fitted(mod29_nooutliersub))
 
-plot_model(mod33_nooutliersub, type='int', mdrt.values = 'meansd')
-plot_model(mod33_nooutliersub, type='pred', mdrt.values = 'meansd')
-
-AICc(mod33_nooutliersub)
-qplot(subdat33_2$heatbustransitpow500_1, mod33_nooutliersub$residuals) + 
+AICc(mod29_nooutliersub)
+qplot(subdat29_2$heatbustransitpow500_1, mod29_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat33_2$heatsubslopepow500_1, mod33_nooutliersub$residuals) +
+qplot(subdat29_2$heatsubslopepow500_1, mod29_nooutliersub$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat33_2$heatsubspdlpow100_1, mod33_nooutliersub$residuals) + 
+qplot(subdat29_2$heatsubspdlpow100_1, mod29_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat33_2$heatsubAADTlog330, mod33_nooutliersub$residuals) + 
+qplot(subdat29_2$heatsubAADTlog300, mod29_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
-#Plot of model33
-mod33pred <- as.data.frame(predict(mod33_nooutliersub, 
+#Plot of model29
+mod29pred <- as.data.frame(predict(mod29_nooutliersub, 
                                    pollutfieldclean_cast[!(SiteIDPair %in% c('64A', '65A', '66A', '67A', '68A', '69A'))],
                                    type='response', se.fit=T))
-Znmod33plot <- ggplot(data=pollutfieldclean_cast[!(SiteIDPair %in% c('64A', '65A', '66A', '67A', '68A', '69A')),],
-                      aes(x=mod33pred$fit,  y=Zn)) +
+Znmod29plot <- ggplot(data=pollutfieldclean_cast[!(SiteIDPair %in% c('64A', '65A', '66A', '67A', '68A', '69A')),],
+                      aes(x=mod29pred$fit,  y=Zn)) +
   geom_point(alpha=0.75, size=2, color='red') + 
-  geom_ribbon(aes(ymin=mod33pred$fit + 1.96*mod33pred$se.fit, ymax=mod33pred$fit - 1.96*mod33pred$se.fit), fill='orange', alpha=1/4) + 
-  geom_point(data=subdat33_2, aes(x=fitted(mod33_nooutliersub), y=Zn), color='black', alpha=1/2, size=2) +
+  geom_ribbon(aes(ymin=mod29pred$fit + 1.96*mod29pred$se.fit, ymax=mod29pred$fit - 1.96*mod29pred$se.fit), fill='orange', alpha=1/4) + 
+  geom_point(data=subdat29_2, aes(x=fitted(mod29_nooutliersub), y=Zn), color='black', alpha=1/2, size=2) +
   geom_abline(intercept=0, slope=1, size=1.3, color='red') +
   #geom_smooth(method='lm', se=FALSE) +
   #geom_text(aes(label=paste0(SiteID,Pair))) + 
@@ -3416,17 +3120,17 @@ Znmod33plot <- ggplot(data=pollutfieldclean_cast[!(SiteIDPair %in% c('64A', '65A
   labs(x='Predicted Zn index', y='Observed Zn index') +
   theme_classic() + 
   theme(text= element_text(size=20))
-png(file.path(moddir, 'scatterplot_Zn_mod33.png'), width=9, height=9, units='in', res=300)
-Znmod33plot
+png(file.path(moddir, 'scatterplot_Zn_mod29.png'), width=9, height=9, units='in', res=300)
+Znmod29plot
 dev.off()
 
 #------ 13. Zn - Check spatial and temporal autocorrelation of residuals for full dataset -------
-resnorm <- rstandard(modlistglmZn[[33]]) #Get standardized residuals from model
+resnorm <- rstandard(modlistglmZn[[29]]) #Get standardized residuals from model
 #Make bubble map of residuals
 bubbledat <- data.frame(resnorm, 
-                        subdat33_2$coords.x1, 
-                        subdat33_2$coords.x2)
-coordinates(bubbledat) <- c("subdat33_2.coords.x1","subdat33_2.coords.x2")
+                        subdat29_2$coords.x1, 
+                        subdat29_2$coords.x2)
+coordinates(bubbledat) <- c("subdat29_2.coords.x1","subdat29_2.coords.x2")
 bubble(bubbledat, "resnorm", col = c("blue","red"),
        main = "Residuals", xlab = "X-coordinates",
        ylab = "Y-coordinates")
@@ -3451,143 +3155,196 @@ moran.plot(resnorm, weightmat_k[[2]], labels=pollutfieldclean_cast[, SiteIDPair]
 #Compute Moran's I
 "Should always only use lm.morantest for residuals from regression, see http://r-sig-geo.2731867.n2.nabble.com/Differences-between-moran-test-and-lm-morantest-td7591336.html
 for an explanation"
-lm.morantest(modlistglmZn[[33]], listw = listw2U(weightmat_k[[1]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmZn[[33]], listw = listw2U(weightmat_k[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmZn[[33]], listw = listw2U(weightmat_k[[3]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmZn[[33]], listw = listw2U(weightmat_k[[4]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmZn[[33]], listw = listw2U(weightmat_k[[5]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmZn[[33]], listw = listw2U(weightmat_all)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmZn[[29]], listw = listw2U(weightmat_k[[1]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmZn[[29]], listw = listw2U(weightmat_k[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmZn[[29]], listw = listw2U(weightmat_k[[3]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmZn[[29]], listw = listw2U(weightmat_k[[4]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmZn[[29]], listw = listw2U(weightmat_k[[5]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmZn[[29]], listw = listw2U(weightmat_all)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
 
 #Test for need for spatial regression model using Lagrange Multiplier (LM) tests
-lm.LMtests(modlistglmZn[[33]], listw = listw2U(weightmat_k[[1]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistglmZn[[33]], listw = listw2U(weightmat_k[[2]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistglmZn[[33]], listw = listw2U(weightmat_k[[3]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(modlistglmZn[[29]], listw = listw2U(weightmat_k[[1]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(modlistglmZn[[29]], listw = listw2U(weightmat_k[[2]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(modlistglmZn[[29]], listw = listw2U(weightmat_k[[3]]), test=c("LMerr","RLMerr", "SARMA"))
 
-
-#################### DOES NOT WORK FOR GLM ###########################
-#Spatial simultaneous autoregressive error model estimation with 2 nearest neighbors
-# sarlm_modZn <- errorsarlm(modlistglmZn[[33]]$call$formula, data = modlistglmZn[[33]]$model, 
-#                         listw = listw2U(weightmat_k[[2]]))
-# summary(sarlm_modZn)
-# #Compare AIC
-# AIC(sarlm_modZn)
-# AIC(modlistlogZn[[31]])
-# #Compare pseudo-R2
-# cor(modlistlogZn[[31]]$model$logZn, fitted(sarlm_modZn))^2
-# cor(modlistlogZn[[31]]$model$logZn, fitted(modlistlogZn[[31]]))^2
-# #Pseudo-R2 on back-transformed data
-# cor(exp(modlistlogZn[[31]]$model$logZn), exp(fitted(sarlm_modZn)))^2
-# cor(exp(modlistlogZn[[31]]$model$logZn), exp(fitted(modlistlogZn[[31]])))^2
-# #Compare MAE
-# DescTools::MAE(modlistlogZn[[31]]$model$logZn, fitted(sarlm_modZn))
-# DescTools::MAE(modlistlogZn[[31]]$model$logZn, fitted(modlistlogZn[[31]]))
-# 
-# #Compare observed~predicted for full-no outlier model and for aspatial and spatial model
-# spatial_comparisonplot <- ggplot(pollutfieldclean_cast, 
-#                                  aes(x=exp(fitted(sarlm_modZn)), y=Zn)) + 
-#   geom_point(aes(x=exp(fitted(modlistlogZn[[31]]))), size=2, alpha=1/2, color='orange') +
-#   geom_point(size=2, alpha=1/2, color='red') + 
-#   geom_abline(size=1, slope=1, intercept=0, color='red') + 
-#   #geom_text(aes(label=paste0(SiteID, Pair))) +
-#   scale_x_continuous(limits=c(0,2), expand=c(0,0)) + 
-#   scale_y_continuous(limits=c(0,2), expand=c(0,0)) + 
-#   labs(x='Predicted Zn', y='Observed Zn') +
-#   coord_fixed() +
-#   theme_classic()
-# spatial_comparisonplot
 
 
 #--------------- B. Cu ~ separate predictors ----
 #Exclude 33A and 33B as way too much of an outlier site
 modlistCu <- list() #List to hold models
-subdatCu <- pollutfieldclean_cast[!(SiteID %in% c(33)),]
+subdatCu <- pollutfieldclean_cast[!(SiteID %in% c(33) | SiteIDPair %in% extraoutliers),]
 modlistCu[[1]] <- lm(Cu ~ 1, data = subdatCu) #Null/Intercept model
 #------ 1. Cu - Single parameter models --------
-modlistCu[[2]] <- lm(Cu ~ heatsubAADTlog300, data = subdatCu)
+modlistCu[[2]] <- lm(Cu ~ heatsubAADTlog200, data = subdatCu)
 ols_regress(modlistCu[[2]])
 #ols_plot_diagnostics(modlistCu[[2]])
+ggplot(subdatCu, aes(x=heatsubAADTlog200, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[3]] <- lm(Cu ~ heat_binglog500, data = subdatCu)
+modlistCu[[3]] <- lm(Cu ~ heatbing1902log300proj, data = subdatCu)
 ols_regress(modlistCu[[3]])
 #ols_plot_diagnostics(modlistCu[[3]])
+ggplot(subdatCu, aes(x=heatbing1902log300proj, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[4]] <- lm(Cu ~ nlcd_imp_ps, data = subdatCu)
+modlistCu[[4]] <- lm(Cu ~ heatbing1902log500proj, data = subdatCu)
 ols_regress(modlistCu[[4]])
 #ols_plot_diagnostics(modlistCu[[4]])
+ggplot(subdatCu, aes(x=heatbing1902log500proj, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[5]] <- lm(Cu ~ heatbustransitlog300, data = subdatCu)
+modlistCu[[5]] <- lm(Cu ~ nlcd_imp_ps, data = subdatCu)
 ols_regress(modlistCu[[5]])
 #ols_plot_diagnostics(modlistCu[[5]])
+ggplot(subdatCu, aes(x=nlcd_imp_ps, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[6]] <- lm(Cu ~ heatsubspdllog300, data = subdatCu)
+modlistCu[[6]] <- lm(Cu ~ nlcd_imp_ps_mean, data = subdatCu)
 ols_regress(modlistCu[[6]])
 #ols_plot_diagnostics(modlistCu[[6]])
+ggplot(subdatCu, aes(x=nlcd_imp_ps_mean, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[7]] <- lm(Cu ~ heatsubslopelog300, data = subdatCu)
-ols_regress(modlistCu[[8]])
-#ols_plot_diagnostics(modlistCu[[8]])
-
-#------ 2. Cu - Multiparameter models --------
-modlistCu[[6]] <- lm(Cu ~ heatbustransitlog300 + heat_binglo300, data = subdatCu)
-ols_regress(modlistCu[[6]])
-#ols_plot_diagnostics(modlistCu[[6]])
-ols_coll_diag(modlistCu[[6]])
-ols_correlations(modlistCu[[6]])
-
-modlistCu[[7]] <- lm(Cu ~ heatbustransitlog300 + heatsubAADTlog300, data = subdatCu)
+modlistCu[[7]] <- lm(Cu ~ heatbustransitlog200, data = subdatCu)
 ols_regress(modlistCu[[7]])
 #ols_plot_diagnostics(modlistCu[[7]])
-ols_coll_diag(modlistCu[[7]])
-ols_correlations(modlistCu[[7]])
+ggplot(subdatCu, aes(x=heatbustransitlog200, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[8]] <- lm(Cu ~ heatbustransitlog300 + heatsubspdllog300, data = subdatCu)
+modlistCu[[8]] <- lm(Cu ~ heatbustransitlog200sqrt, data = subdatCu)
 ols_regress(modlistCu[[8]])
 #ols_plot_diagnostics(modlistCu[[8]])
-ols_coll_diag(modlistCu[[8]])
-ols_correlations(modlistCu[[8]])
+ggplot(subdatCu, aes(x=heatbustransitlog200sqrt, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[9]] <- lm(Cu ~ heatbustransitlog300 + nlcd_imp_ps, data = subdatCu)
+modlistCu[[9]] <- lm(Cu ~ heatsubspdlpow50_1, data = subdatCu)
 ols_regress(modlistCu[[9]])
-ols_plot_diagnostics(modlistCu[[9]])
-ols_coll_diag(modlistCu[[9]])
-ols_correlations(modlistCu[[9]])
+#ols_plot_diagnostics(modlistCu[[9]])
+ggplot(subdatCu, aes(x=heatsubspdlpow50_1, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[10]] <- lm(Cu ~ heatbustransitlog300*nlcd_imp_ps, data = subdatCu)
+modlistCu[[10]] <- lm(Cu ~ heatsubslopepow500_1, data = subdatCu)
 ols_regress(modlistCu[[10]])
 #ols_plot_diagnostics(modlistCu[[10]])
-ols_coll_diag(modlistCu[[10]])
-ols_correlations(modlistCu[[10]])
+ggplot(subdatCu, aes(x=heatsubspdlpow500_1, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[11]] <- lm(Cu ~ heatbustransitlog300*heatsubslopelog300, data = subdatCu)
+
+modlistCu[[11]] <- lm(Cu ~ heatsubslopepow500_1, data = subdatCu)
 ols_regress(modlistCu[[11]])
 #ols_plot_diagnostics(modlistCu[[11]])
-ols_coll_diag(modlistCu[[11]])
-ols_correlations(modlistCu[[11]])
+ggplot(subdatCu, aes(x=heatsubspdlpow500_1, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[12]] <- lm(Cu ~ heatbustransitlog300 + nlcd_imp_ps + heatsubAADTlog300, data = subdatCu)
+modlistCu[[12]] <- lm(Cu ~ heatsubAADTlog100, data = subdatCu)
 ols_regress(modlistCu[[12]])
 #ols_plot_diagnostics(modlistCu[[12]])
-ols_coll_diag(modlistCu[[12]])
-ols_correlations(modlistCu[[12]])
+ggplot(subdatCu, aes(x=heatsubAADTlog100, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[13]] <- lm(Cu ~ heatbustransitlog300*heatsubspdllog300 + nlcd_imp_ps, data = subdatCu)
+modlistCu[[13]] <- lm(Cu ~ heatbustransitlog300sqrt, data = subdatCu)
 ols_regress(modlistCu[[13]])
 #ols_plot_diagnostics(modlistCu[[13]])
-ols_coll_diag(modlistCu[[13]])
-ols_correlations(modlistCu[[13]])
-plot_model(modlistCu[[13]], type='int')
+ggplot(subdatCu, aes(x=heatbustransitlog300sqrt, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[14]] <- lm(Cu ~ heatbustransitlog300*heatsubAADTlog300 + nlcd_imp_ps, data = subdatCu)
+modlistCu[[14]] <- lm(Cu ~ heatsubslopepow300_1, data = subdatCu)
 ols_regress(modlistCu[[14]])
 #ols_plot_diagnostics(modlistCu[[14]])
-ols_coll_diag(modlistCu[[14]])
-ols_correlations(modlistCu[[14]])
+ggplot(subdatCu, aes(x=heatsubspdlpow300_1, y=Cu, label=SiteIDPair)) + 
+  geom_text()
 
-modlistCu[[15]] <- lm(Cu ~ heatbustransitlog300*heat_binglog300 + nlcd_imp_ps, data = subdatCu)
+
+modlistCu[[15]] <- lm(Cu ~ heatsubslopepow300_1, data = subdatCu)
 ols_regress(modlistCu[[15]])
-#ols_plot_diagnostics(modlistCu[[13]])
-ols_coll_diag(modlistCu[[15]])
-ols_correlations(modlistCu[[15]])
+#ols_plot_diagnostics(modlistCu[[15]])
+ggplot(subdatCu, aes(x=heatsubspdlpow300_1, y=Cu, label=SiteIDPair)) + 
+  geom_text()
+
+#------ 2. Cu - Multiparameter models --------
+modlistCu[[16]] <- lm(Cu ~ heatbustransitlog300sqrt + heatbing1902log500proj, data = subdatCu)
+ols_regress(modlistCu[[16]])
+#ols_plot_diagnostics(modlistCu[[16]])
+ols_coll_diag(modlistCu[[16]])
+ols_correlations(modlistCu[[16]])
+
+modlistCu[[17]] <- lm(Cu ~ heatbustransitlog200sqrt + heatbing1902log500proj, data = subdatCu)
+ols_regress(modlistCu[[17]])
+#ols_plot_diagnostics(modlistCu[[17]])
+ols_coll_diag(modlistCu[[17]])
+ols_correlations(modlistCu[[17]])
+
+modlistCu[[18]] <- lm(Cu ~ heatbustransitlog200sqrt + heatbing1902log300proj, data = subdatCu)
+ols_regress(modlistCu[[18]])
+#ols_plot_diagnostics(modlistCu[[18]])
+ols_coll_diag(modlistCu[[18]])
+ols_correlations(modlistCu[[18]])
+
+modlistCu[[19]] <- lm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean, data = subdatCu)
+ols_regress(modlistCu[[19]])
+#ols_plot_diagnostics(modlistCu[[19]])
+ols_coll_diag(modlistCu[[19]])
+ols_correlations(modlistCu[[19]])
+
+modlistCu[[20]] <- lm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatbing1902log300proj, data = subdatCu)
+ols_regress(modlistCu[[20]])
+#ols_plot_diagnostics(modlistCu[[20]])
+ols_coll_diag(modlistCu[[20]])
+ols_correlations(modlistCu[[20]])
+
+modlistCu[[21]] <- lm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubslopepow300_1, data = subdatCu)
+ols_regress(modlistCu[[21]])
+#ols_plot_diagnostics(modlistCu[[21]])
+ols_coll_diag(modlistCu[[21]])
+ols_correlations(modlistCu[[21]])
+
+modlistCu[[22]] <- lm(Cu ~ heatsubspdlpow50_1 + nlcd_imp_ps_mean, data = subdatCu)
+ols_regress(modlistCu[[22]])
+#ols_plot_diagnostics(modlistCu[[22]])
+ols_coll_diag(modlistCu[[22]])
+ols_correlations(modlistCu[[22]])
+
+modlistCu[[23]] <- lm(Cu ~ heatsubspdlpow50_1 + heatbing1902log300proj, data = subdatCu)
+ols_regress(modlistCu[[23]])
+#ols_plot_diagnostics(modlistCu[[23]])
+ols_coll_diag(modlistCu[[23]])
+ols_correlations(modlistCu[[23]])
+
+modlistCu[[24]] <- lm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubspdlpow50_1, data = subdatCu)
+ols_regress(modlistCu[[24]])
+#ols_plot_diagnostics(modlistCu[[24]])
+ols_coll_diag(modlistCu[[24]])
+ols_correlations(modlistCu[[24]])
+
+modlistCu[[25]] <- lm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubspdlpow50_1, data = subdatCu)
+ols_regress(modlistCu[[25]])
+#ols_plot_diagnostics(modlistCu[[25]])
+ols_coll_diag(modlistCu[[25]])
+ols_correlations(modlistCu[[25]])
+
+modlistCu[[26]] <- lm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatbing1902log500proj, data = subdatCu)
+ols_regress(modlistCu[[26]])
+#ols_plot_diagnostics(modlistCu[[26]])
+ols_coll_diag(modlistCu[[26]])
+ols_correlations(modlistCu[[26]])
+
+modlistCu[[27]] <- lm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean*heatbing1902log300proj, data = subdatCu)
+ols_regress(modlistCu[[27]])
+#ols_plot_diagnostics(modlistCu[[27]])
+ols_coll_diag(modlistCu[[27]])
+ols_correlations(modlistCu[[27]])
+
+modlistCu[[28]] <- lm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubAADTlog100, data = subdatCu)
+ols_regress(modlistCu[[28]])
+#ols_plot_diagnostics(modlistCu[[28]])
+ols_coll_diag(modlistCu[[28]])
+ols_correlations(modlistCu[[28]])
+
+modlistCu[[29]] <- lm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubAADTlog200, data = subdatCu)
+ols_regress(modlistCu[[29]])
+ols_plot_diagnostics(modlistCu[[29]])
+ols_coll_diag(modlistCu[[29]])
+ols_correlations(modlistCu[[29]])
 
 #------ 3. Cu - Make latex model summary table ----
 vnum <- max(sapply(modlistCu, function(mod) {length(mod$coefficients)}))
@@ -3603,99 +3360,190 @@ texi2pdf('modeltable_Cu.tex')
 vnum <- max(sapply(modlistCu, function(mod) {length(mod$coefficients)}))
 model_summaryCu_nooutliers<- as.data.table(
   ldply(modlistCu, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50,
-                                                             remove_outliers = 'outliers and leverage',
-                                                             labelvec = pollutfieldclean_cast[SiteID != 33, paste0(SiteID, Pair)])}))
+                                                             remove_outliers = 'outliers', # & leverage',
+                                                             labelvec = pollutfieldclean_cast[, SiteIDPair])}))
 setorder(model_summaryCu_nooutliers, -R2pred, AICc)  
 cat(latex_format(model_summaryCu_nooutliers), file = file.path(moddir, 'modeltable_Cu_nooutliers.tex'))
 setwd(moddir)
 texi2pdf('modeltable_Cu_nooutliers.tex')
 
-#-------5. Cu -Check final selected model -------
-mod6_nooutliers <- regdiagnostic_customtab(modlistCu[[6]], maxpar=vnum, 
+#-------5. Cu - Check final selected model -------
+mod19_nooutliers <- regdiagnostic_customtab(modlistCu[[19]], maxpar=vnum, 
                                            remove_outliers = 'outliers',
                                            labelvec = subdatCu[, paste0(SiteID, Pair)],
                                            kCV = TRUE, k=10, cvreps=50)
 subdat <- subdatCu[!(paste0(SiteID, Pair) %in% 
-                       strsplit(gsub('\\\\', '', mod6_nooutliers['outliers']), ',')$outliers),]
-mod6_nooutliersub <- lm(Cu ~ heatbustransitlog300 + heat_binglog300 + nlcd_imp_ps, 
-                        data = subdatCu)
-summary(mod6_nooutliersub)
-ols_plot_diagnostics(mod6_nooutliersub)
-ols_regress(mod6_nooutliersub)
+                       strsplit(gsub('\\\\', '', mod19_nooutliers['outliers']), ',')$outliers),]
+mod19_nooutliersub <- lm(Cu ~ heatbustransitlog200sqrt +  nlcd_imp_ps_mean, 
+                        data = subdat)
+summary(mod19_nooutliersub)
+ols_plot_diagnostics(mod19_nooutliersub)
+ols_regress(mod19_nooutliersub)
 par(mfrow=c(2,2))
-plot(mod6_nooutliersub)
-ols_coll_diag(mod6_nooutliersub)
-ols_correlations(mod6_nooutliersub)
-AICc(mod6_nooutliersub)
+plot(mod19_nooutliersub)
+ols_coll_diag(mod19_nooutliersub)
+ols_correlations(mod19_nooutliersub)
+AICc(mod19_nooutliersub)
 
-qplot(subdat$heatbustransitlog300, mod6_nooutliersub$residuals) + 
+qplot(subdat$heatbing1902log300proj, mod19_nooutliersub$residuals) +
   geom_smooth(method='lm', color='red')
-qplot(subdat$heat_binglog300, mod6_nooutliersub$residuals) +
+qplot(subdat$heatsubspdllog300, mod19_nooutliersub$residuals) +
   geom_smooth(method='lm', color='red')
-qplot(subdat$heatsubspdllog300, mod6_nooutliersub$residuals) +
-  geom_smooth(method='lm', color='red')
-qplot(subdat$heatsubAADTlog300, mod6_nooutliersub$residuals) + 
+qplot(subdat$heatsubAADTlog300, mod19_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$nlcd_imp_ps, mod6_nooutliersub$residuals) + 
+qplot(subdat$heatsubslopelog500, mod19_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$nlcd_imp_ps_mean, mod6_nooutliersub$residuals) + 
-  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-ggplot(subdat, aes(x=NLCD_reclass_final_PS, y=mod6_nooutliersub$residuals)) +
+
+ggplot(subdat, aes(x=NLCD_reclass_final_PS, y=mod19_nooutliersub$residuals)) +
   geom_boxplot() +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
-ggplot(subdatCu, aes(y=predict(modlistCu[[6]], subdatCu), x=Cu)) +
+ggplot(subdat, aes(y=predict(modlistCu[[19]], subdat), x=Cu)) +
   geom_point(alpha=1/4, size=2) + 
-  geom_point(data=subdat, aes(y = predict(modlistCu[[6]], subdat)), alpha=1/2, size=2) + 
-  geom_point(aes(y = predict(mod6_nooutliersub, subdatCu)), color='red', alpha=1/2, size=2) + 
+  geom_point(data=subdat, aes(y = predict(modlistCu[[19]], subdat)), alpha=1/2, size=2) + 
+  geom_point(aes(y = predict(mod19_nooutliersub, subdat)), color='red', alpha=1/2, size=2) + 
   geom_abline(intercept=0, slope=1) +
   theme_classic()
 
 
+#------ 6. GLM Cu - run all models for table ----
+modlistglmCu <- list()
 
-mod9_nooutliers <- regdiagnostic_customtab(modlistCu[[9]], maxpar=vnum, 
-                                            remove_outliers = 'outliers',
-                                            labelvec = subdatCu[, paste0(SiteID, Pair)],
-                                            kCV = TRUE, k=10, cvreps=50)
-subdat <- subdatCu[!(paste0(SiteID, Pair) %in% 
-                                    strsplit(gsub('\\\\', '', mod9_nooutliers['outliers']), ',')$outliers),]
-mod9_nooutliersub <- lm(Cu ~ heatbustransitlog300 + nlcd_imp_ps, 
-                         data = subdat)
-summary(mod9_nooutliersub)
-ols_plot_diagnostics(mod9_nooutliersub)
-ols_regress(mod9_nooutliersub)
-par(mfrow=c(2,2))
-plot(mod9_nooutliersub)
-ols_coll_diag(mod9_nooutliersub)
-ols_correlations(mod9_nooutliersub)
-AICc(mod9_nooutliersub)
+modlistglmCu[[1]] <- glm(Cu ~ heatsubAADTlog200, data=subdatCu, family=Gamma(link='log'))
 
-qplot(subdat$heatbustransitlog300, mod9_nooutliersub$residuals) + 
+modlistglmCu[[2]] <- glm(Cu ~ heatsubAADTlog200, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[2]] <- glm(Cu ~ heatsubAADTlog200, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[3]] <- glm(Cu ~ heatbing1902log300proj, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[4]] <- glm(Cu ~ heatbing1902log500proj, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[5]] <- glm(Cu ~ nlcd_imp_ps, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[6]] <- glm(Cu ~ nlcd_imp_ps_mean, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[7]] <- glm(Cu ~ heatbustransitlog200, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[8]] <- glm(Cu ~ heatbustransitlog200sqrt, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[9]] <- glm(Cu ~ heatsubspdlpow50_1, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[10]] <- glm(Cu ~ heatsubslopepow500_1, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[11]] <- glm(Cu ~ heatsubslopepow500_1, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[12]] <- glm(Cu ~ heatsubAADTlog100, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[13]] <- glm(Cu ~ heatbustransitlog300sqrt, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[14]] <- glm(Cu ~ heatsubslopepow300_1, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[15]] <- glm(Cu ~ heatsubslopepow300_1, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[16]] <- glm(Cu ~ heatbustransitlog300sqrt + heatbing1902log500proj, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[17]] <- glm(Cu ~ heatbustransitlog200sqrt + heatbing1902log500proj, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[18]] <- glm(Cu ~ heatbustransitlog200sqrt + heatbing1902log300proj, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[19]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean, data=subdatCu, family=gaussian(link='log'))
+
+modlistglmCu[[20]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatbing1902log300proj, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[21]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubslopepow300_1, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[22]] <- glm(Cu ~ heatsubspdlpow50_1 + nlcd_imp_ps_mean, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[23]] <- glm(Cu ~ heatsubspdlpow50_1 + heatbing1902log300proj, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[24]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubspdlpow50_1, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[25]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubspdlpow50_1, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[26]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatbing1902log500proj, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[27]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean*heatbing1902log300proj, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[28]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubAADTlog100, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[29]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubAADTlog200, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[30]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubAADTlog300, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[31]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubAADTlog500, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[32]] <- glm(Cu ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean*heatsubAADTlog500, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[33]] <- glm(Cu ~ heatbustransitlog200sqrt + heatsubAADTlog300, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[34]] <- glm(Cu ~ heatbustransitlog200sqrt + heatsubAADTlog500, data=subdatCu, family=Gamma(link='log'))
+
+modlistglmCu[[35]] <- glm(Cu ~ nlcd_imp_ps_mean + heatsubAADTlog300, data=subdatCu, family=Gamma(link='log'))
+
+#------ 7. GLM Cu - Make latex model summary table ----
+vnum <- max(sapply(modlistglmCu, function(mod) {length(mod$coefficients)}))
+
+model_summaryglmCu<- as.data.table(
+  ldply(modlistglmCu, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
+model_summaryglmCu[, AICc := as.numeric(AICc)]
+model_summaryglmCu[nvars==0, `:=`(
+  MAEcv = as.character(round(
+    MAE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Cu], fitted(modlistglmCu[[1]])),2)),
+  RMSEcv = as.character(round(
+    RMSE(pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers), Cu], fitted(modlistglmCu[[1]])),2))
+)]
+setorder(model_summaryglmCu, AICc)  
+cat(latex_format(model_summaryglmCu[, -c("BreuschPagan\\_fitp", "Score\\_fitp", "R2", "R2adj", "R2pred", "RMSE", "MAE", "VIF8")]),
+    file = file.path(moddir, 'modeltable_glmCu_2019.tex'))
+setwd(moddir)
+texi2pdf('modeltable_glmCu_2019.tex')
+
+#Format table by hand
+#pow100\_1 to linear (and other kernel size)
+#spdl to speed
+#nlcd\_imp\_ps to imperviousness
+#heatbing1902 to congestion
+#bustransit to transit
+#remove sub
+#reduce age size to 25 in width and 8 in height
+
+texi2pdf('modeltable_glmCu_2019edit.tex')
+
+#------ 8. GLM Cu - test selected model ----
+summary(modlistglmCu[[30]])
+GAMrescheck(modlistglmCu[[30]])
+regdiagnostic_customtab(mod=modlistglmCu[[30]], maxpar=vnum, kCV = TRUE, k=10, cvreps=50)
+MAPE(subdatCu[, Cu], fitted(modlistglmCu[[30]]))
+MAE(subdatCu[, Cu], fitted(modlistglmCu[[30]]))
+RMSE(subdatCu[, Cu], fitted(modlistglmCu[[30]]))
+
+qplot(subdatCu[, heatbing1902log500proj],
+      modlistglmCu[[30]]$residuals) +
   geom_smooth(method='lm', color='red')
-qplot(subdat$heat_binglog300, mod9_nooutliersub$residuals) +
-  geom_smooth(method='lm', color='red')
-qplot(subdat$heatsubspdllog300, mod9_nooutliersub$residuals) +
-  geom_smooth(method='lm', color='red')
-qplot(subdat$heatsubAADTlog300, mod9_nooutliersub$residuals) + 
-  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$nlcd_imp_ps, mod9_nooutliersub$residuals) + 
-  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$nlcd_imp_ps_mean, mod9_nooutliersub$residuals) + 
-  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-ggplot(subdat, aes(x=NLCD_reclass_final_PS, y=mod9_nooutliersub$residuals)) +
-  geom_boxplot() +
-  geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
-ggplot(subdatCu, aes(y=predict(modlistCu[[9]], subdatCu), x=Cu)) +
-  geom_point(alpha=1/4, size=2) + 
-  geom_point(data=subdat, aes(y = predict(modlistCu[[9]], subdat)), alpha=1/2, size=2) + 
-  geom_point(aes(y = predict(mod9_nooutliersub, subdatCu)), color='red', alpha=1/2, size=2) + 
-  geom_abline(intercept=0, slope=1) +
-  theme_classic()
+qplot(subdatCu[, heatsubspdlpow50_1],
+      modlistglmCu[[30]]$residuals) +
+  geom_smooth(method='lm', color='red')
 
-#------ 6. Cu -Check spatial and temporal autocorrelation of residuals for full dataset -------
+qplot(subdatCu[, heatsubslopepow300_1],
+      modlistglmCu[[30]]$residuals) +
+  geom_smooth(method='lm', color='red')
+
+qplot(subdatCu[, NLCD_reclass_final_PS],
+      modlistglmCu[[30]]$residuals) +
+  geom_smooth(method='lm', color='red')
+
+#Compare with predictions without transformation
+qplot(abs(fitted(modlistglmCu[[30]])-subdatCu[, Zn]), 
+      abs(fitted(modlistCu[[19]])-subdatCu[, Zn])) + 
+  geom_abline(slope=1) + 
+  labs(x='Absolute error for model glm 29 - glm transit200 + nlcd + AADT300 ', 
+       y='Absolute error for model 19 - transit200 + nlcd')
+
+#------ 6. Cu - Check spatial and temporal autocorrelation of residuals for full dataset -------
 par(mfrow=c(1,1))
-resnorm <- rstandard(modlistCu[[9]]) #Get standardized residuals from model
+resnorm <- rstandard(modlistglmCu[[30]]) #Get standardized residuals from model
 #Make bubble map of residuals
 bubbledat <- data.frame(resnorm, subdatCu$coords.x1, subdatCu$coords.x2)
 coordinates(bubbledat) <- c("subdatCu.coords.x1","subdatCu.coords.x2")
@@ -3710,7 +3558,7 @@ plot(spline.correlog(x=coordinates(bubbledat)[,1], y=coordinates(bubbledat)[,2],
                      z=bubbledat$resnorm, resamp=500, quiet=TRUE, xmax = 5000))
 #Compute a spatial weight matrix based on IDW
 weightmat_k <- lapply(1:10, function(i) {
-  weightmat_IDW(subdatCu[, .(coords.x1, coords.x2)], knb = i, mindist = 10)}) #Based on 10 nearest neighbors
+  weightmat_IDW(subdatCu[, .(coords.x1, coords.x2)], knb = i, mindist = 10)}) #Based on 1-10 nearest neighbors
 weightmat_all <- weightmat_IDW(subdatCu[, .(coords.x1, coords.x2)], knb = NULL, mindist = 10) #Based on all points
 
 #Moran plots
@@ -3721,39 +3569,39 @@ moran.plot(resnorm, weightmat_k[[2]], labels=subdatCu[,paste0(SiteID, Pair)], pc
 #Compute Moran's I
 "Should always only use lm.morantest for residuals from regression, see http://r-sig-geo.2731867.n2.nabble.com/Differences-between-moran-test-and-lm-morantest-td7591336.html
 for an explanation"
-lm.morantest(modlistCu[[9]], listw = listw2U(weightmat_k[[1]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistCu[[9]], listw = listw2U(weightmat_k[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistCu[[9]], listw = listw2U(weightmat_k[[3]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistCu[[9]], listw = listw2U(weightmat_k[[4]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistCu[[9]], listw = listw2U(weightmat_k[[5]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistCu[[9]], listw = listw2U(weightmat_all)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[1]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[3]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[4]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[5]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_all)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
 
 #Test for need for spatial regression model using Lagrange Multiplier (LM) tests
-lm.LMtests(modlistCu[[9]], listw = listw2U(weightmat_k[[1]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistCu[[9]], listw = listw2U(weightmat_k[[2]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistCu[[9]], listw = listw2U(weightmat_k[[3]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistCu[[9]], listw = listw2U(weightmat_k[[4]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistCu[[9]], listw = listw2U(weightmat_k[[5]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistCu[[9]], listw = listw2U(weightmat_all), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[1]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[2]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[3]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[4]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[5]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_all), test=c("LMerr","RLMerr", "SARMA"))
 
 
-#Spatial simultaneous autoregressive error model estimation with 2 nearest neighbors
-sarlm_modCu <- errorsarlm(modlistCu[[9]]$call$formula, data = modlistCu[[9]]$model, 
-                          listw = listw2U(weightmat_k[[4]]))
+#Spatial simultaneous autoregressive error model estimation with 1 nearest neighbors
+sarlm_modCu <- errorsarlm(modlistCu[[19]]$call$formula, data = modlistCu[[19]]$model, 
+                          listw = listw2U(weightmat_k[[1]]))
 summary(sarlm_modCu)
 #Compare AIC
 AIC(sarlm_modCu)
-AIC(modlistCu[[9]])
+AIC(modlistCu[[19]])
 #Compare pseudo-R2
-cor(modlistCu[[9]]$model$Cu, fitted(sarlm_modCu))^2
-cor(modlistCu[[9]]$model$Cu, fitted(modlistCu[[9]]))^2
+cor(modlistCu[[19]]$model$Cu, fitted(sarlm_modCu))^2
+cor(modlistCu[[19]]$model$Cu, fitted(modlistCu[[19]]))^2
 #Compare MAE
-DescTools::MAE(modlistCu[[9]]$model$Cu, fitted(sarlm_modCu))
-DescTools::MAE(modlistCu[[9]]$model$Cu, fitted(modlistCu[[9]]))
+DescTools::MAE(modlistCu[[19]]$model$Cu, fitted(sarlm_modCu))
+DescTools::MAE(modlistCu[[19]]$model$Cu, fitted(modlistCu[[19]]))
 
 #Compare observed~predicted for full-no outlier model and for aspatial and spatial model
 spatial_comparisonplot <- ggplot(subdatCu, aes(x=fitted(sarlm_modCu), y=Cu)) + 
-  geom_point(aes(x=fitted(modlistCu[[9]])), size=2, alpha=1/2, color='orange') +
+  geom_point(aes(x=fitted(modlistCu[[19]])), size=2, alpha=1/2, color='orange') +
   geom_point(size=2, alpha=1/2, color='red') + 
   geom_abline(size=1, slope=1, intercept=0, color='red') + 
   #geom_text(aes(label=paste0(SiteID, Pair))) +
@@ -3769,208 +3617,10 @@ bubble(bubbledat_postsarlm, "resnorm_postsarlm", col = c("blue","red"),
        main = "Residuals", xlab = "X-coordinates",
        ylab = "Y-coordinates")
 
-#------ 7. Transform Cu -----
-pollutfieldclean_cast[, getlambda(Cu)]
-pollutfieldclean_cast[, logCu := log(Cu)]
-subdatCu[, logCu := log(Cu)]
 
-modlistlogCu <- list() #List to hold models
-modlistlogCu[[1]] <- lm(logCu ~ 1, data = subdatCu) #Null/Intercept model
-#------ 8. log(Cu) - Single parameter models --------
-modlistlogCu[[2]] <- lm(logCu ~ heatsubAADTlog300, data = subdatCu)
-ols_regress(modlistlogCu[[2]])
-#ols_plot_diagnostics(modlistlogCu[[2]])
 
-modlistlogCu[[3]] <- lm(logCu ~ heat_binglog500, data = subdatCu)
-ols_regress(modlistlogCu[[3]])
-#ols_plot_diagnostics(modlistlogCu[[3]])
 
-modlistlogCu[[4]] <- lm(logCu ~ nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[4]])
-#ols_plot_diagnostics(modlistlogCu[[4]])
-
-modlistlogCu[[5]] <- lm(logCu ~ heatbustransitlog300, data = subdatCu)
-ols_regress(modlistlogCu[[5]])
-#ols_plot_diagnostics(modlistlogCu[[5]])
-
-modlistlogCu[[6]] <- lm(logCu ~ heatsubspdllog300, data = subdatCu)
-ols_regress(modlistlogCu[[6]])
-#ols_plot_diagnostics(modlistlogCu[[6]])
-
-modlistlogCu[[7]] <- lm(logCu ~ heatsubslopelog300, data = subdatCu)
-ols_regress(modlistlogCu[[8]])
-#ols_plot_diagnostics(modlistlogCu[[8]])
-
-#------ 9. log(Cu) -Multiparameter models --------
-modlistlogCu[[6]] <- lm(logCu ~ heatbustransitlog300 + heat_binglo300, data = subdatCu)
-ols_regress(modlistlogCu[[6]])
-#ols_plot_diagnostics(modlistlogCu[[6]])
-ols_coll_diag(modlistlogCu[[6]])
-ols_correlations(modlistlogCu[[6]])
-
-modlistlogCu[[7]] <- lm(logCu ~ heatbustransitlog300 + heatsubAADTlog300, data = subdatCu)
-ols_regress(modlistlogCu[[7]])
-#ols_plot_diagnostics(modlistlogCu[[7]])
-ols_coll_diag(modlistlogCu[[7]])
-ols_correlations(modlistlogCu[[7]])
-
-modlistlogCu[[8]] <- lm(logCu ~ heatbustransitlog300 + heatsubspdllog300, data = subdatCu)
-ols_regress(modlistlogCu[[8]])
-#ols_plot_diagnostics(modlistlogCu[[8]])
-ols_coll_diag(modlistlogCu[[8]])
-ols_correlations(modlistlogCu[[8]])
-
-modlistlogCu[[9]] <- lm(logCu ~ heatbustransitlog300 + nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[9]])
-ols_plot_diagnostics(modlistlogCu[[9]])
-ols_coll_diag(modlistlogCu[[9]])
-ols_correlations(modlistlogCu[[9]])
-
-modlistlogCu[[10]] <- lm(logCu ~ heatbustransitlog300*nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[10]])
-#ols_plot_diagnostics(modlistlogCu[[10]])
-ols_coll_diag(modlistlogCu[[10]])
-ols_correlations(modlistlogCu[[10]])
-
-modlistlogCu[[11]] <- lm(logCu ~ heatbustransitlog300*heatsubslopelog300, data = subdatCu)
-ols_regress(modlistlogCu[[11]])
-#ols_plot_diagnostics(modlistlogCu[[11]])
-ols_coll_diag(modlistlogCu[[11]])
-ols_correlations(modlistlogCu[[11]])
-
-modlistlogCu[[12]] <- lm(logCu ~ heatbustransitlog300 + nlcd_imp_ps + heatsubAADTlog300, data = subdatCu)
-ols_regress(modlistlogCu[[12]])
-#ols_plot_diagnostics(modlistlogCu[[12]])
-ols_coll_diag(modlistlogCu[[12]])
-ols_correlations(modlistlogCu[[12]])
-
-modlistlogCu[[13]] <- lm(logCu ~ heatbustransitlog300*heatsubspdllog300 + nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[13]])
-#ols_plot_diagnostics(modlistlogCu[[13]])
-ols_coll_diag(modlistlogCu[[13]])
-ols_correlations(modlistlogCu[[13]])
-plot_model(modlistlogCu[[13]], type='int')
-
-modlistlogCu[[14]] <- lm(logCu ~ heatbustransitlog300*heatsubAADTlog300 + nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[14]])
-#ols_plot_diagnostics(modlistlogCu[[14]])
-ols_coll_diag(modlistlogCu[[14]])
-ols_correlations(modlistlogCu[[14]])
-
-modlistlogCu[[15]] <- lm(logCu ~ heatbustransitlog300*heat_binglog300 + nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[15]])
-#ols_plot_diagnostics(modlistlogCu[[15]])
-ols_coll_diag(modlistlogCu[[15]])
-ols_correlations(modlistlogCu[[15]])
-
-#Models without bus transit
-modlistlogCu[[16]] <- lm(logCu ~ heatsubAADTlog300 + heat_binglog300, data = subdatCu)
-ols_regress(modlistlogCu[[16]])
-#ols_plot_diagnostics(modlistlogCu[[16]])
-ols_coll_diag(modlistlogCu[[16]])
-ols_correlations(modlistlogCu[[16]])
-
-modlistlogCu[[17]] <- lm(logCu ~ heatsubspdllog300 + heat_binglog300, data = subdatCu)
-ols_regress(modlistlogCu[[17]])
-#ols_plot_diagnostics(modlistlogCu[[17]])
-ols_coll_diag(modlistlogCu[[17]])
-ols_correlations(modlistlogCu[[17]])
-
-modlistlogCu[[18]] <- lm(logCu ~ heatsubspdllog300 +  heatsubAADTlog300, data = subdatCu)
-ols_regress(modlistlogCu[[18]])
-#ols_plot_diagnostics(modlistlogCu[[18]])
-ols_coll_diag(modlistlogCu[[18]])
-ols_correlations(modlistlogCu[[18]])
-
-modlistlogCu[[19]] <- lm(logCu ~ heatsubspdllog300 +  heatsubAADTlog300 + heat_binglog300, data = subdatCu)
-ols_regress(modlistlogCu[[19]])
-#ols_plot_diagnostics(modlistlogCu[[19]])
-ols_coll_diag(modlistlogCu[[19]])
-ols_correlations(modlistlogCu[[19]])
-
-modlistlogCu[[20]] <- lm(logCu ~ heatsubspdllog300*heatsubAADTlog300, data = subdatCu)
-ols_regress(modlistlogCu[[20]])
-#ols_plot_diagnostics(modlistlogCu[[20]])
-ols_coll_diag(modlistlogCu[[20]])
-ols_correlations(modlistlogCu[[20]])
-#plot_model(modlistlogCu[[20]], type='int', mdrt.values='all')
-
-modlistlogCu[[21]] <- lm(logCu ~ heatsubAADTlog300 + heat_binglog300 + nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[21]])
-#ols_plot_diagnostics(modlistlogCu[[21]])
-ols_coll_diag(modlistlogCu[[21]])
-ols_correlations(modlistlogCu[[21]])
-
-modlistlogCu[[22]] <- lm(logCu ~ heatsubAADTlog300 + heatsubspdllog300 + nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[22]])
-#ols_plot_diagnostics(modlistlogCu[[22]])
-ols_coll_diag(modlistlogCu[[22]])
-ols_correlations(modlistlogCu[[22]])
-
-modlistlogCu[[23]] <- lm(logCu ~ heatsubAADTlog300 + nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[23]])
-#ols_plot_diagnostics(modlistlogCu[[23]])
-ols_coll_diag(modlistlogCu[[23]])
-ols_correlations(modlistlogCu[[23]])
-
-modlistlogCu[[24]] <- lm(logCu ~ heatsubspdllog300 + nlcd_imp_ps, data = subdatCu)
-ols_regress(modlistlogCu[[24]])
-#ols_plot_diagnostics(modlistlogCu[[24]])
-ols_coll_diag(modlistlogCu[[24]])
-ols_correlations(modlistlogCu[[24]])
-
-#------ 10. log(Cu) - Make latex model summary table ----
-vnum <- max(sapply(modlistlogCu, function(mod) {length(mod$coefficients)}))
-model_summarylogCu<- as.data.table(
-  ldply(modlistlogCu, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
-model_summarylogCu[, AICc := as.numeric(AICc)]
-setorder(model_summarylogCu, AICc, -R2pred)  
-cat(latex_format(model_summarylogCu), file = file.path(moddir, 'modeltable_logCu.tex'))
-setwd(moddir)
-texi2pdf('modeltable_logCu.tex')
-
-#------ 11. log(Cu) - Make latex model summary table when excluding outliers ----
-vnum <- max(sapply(modlistlogCu, function(mod) {length(mod$coefficients)}))
-model_summarylogCu_nooutliers<- as.data.table(
-  ldply(modlistlogCu, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50,
-                                                          remove_outliers = 'outliers',
-                                                          labelvec = pollutfieldclean_cast[SiteID != 33, paste0(SiteID, Pair)])}))
-setorder(model_summarylogCu_nooutliers, -R2pred, AICc)  
-cat(latex_format(model_summarylogCu_nooutliers), file = file.path(moddir, 'modeltable_logCu_nooutliers.tex'))
-setwd(moddir)
-texi2pdf('modeltable_logCu_nooutliers.tex')
-
-#-------12. log(Cu) - Compare final selected models -------
-#Compare model 9 and 23
-mod23_nooutliers <- regdiagnostic_customtab(modlistlogCu[[23]], maxpar=vnum, 
-                                           remove_outliers = 'outliers',
-                                           labelvec = subdatCu[, paste0(SiteID, Pair)],
-                                           kCV = TRUE, k=10, cvreps=50)
-subdat <- subdatCu[!(paste0(SiteID, Pair) %in% 
-                       strsplit(gsub('\\\\', '', mod23_nooutliers['outliers']), ',')$outliers),]
-mod23_nooutliersub <- lm(logCu ~ heatbustransitlog300 + nlcd_imp_ps, 
-                        data = subdat)
-summary(mod23_nooutliersub)
-ols_plot_diagnostics(mod23_nooutliersub)
-ols_regress(mod6_nooutliersub)
-par(mfrow=c(2,2))
-plot(mod6_nooutliersub)
-ols_coll_diag(mod6_nooutliersub)
-ols_correlations(mod6_nooutliersub)
-AICc(mod6_nooutliersub)
-
-ggplot(subdatCu, aes(y=predict(modlistlogCu[[23]], subdatCu), x=logCu)) +
-  geom_point(alpha=1/4, size=2) + 
-  geom_point(data=subdat, aes(y = predict(modlistlogCu[[23]], subdat)), alpha=1/2, size=2) + 
-  geom_point(data=subdat, aes(y = predict(mod23_nooutliersub, subdat)), color='red', size=2) + 
-  geom_point(aes(y = predict(mod23_nooutliersub, subdatCu)), color='orange', alpha=1/2, size=2) +
-  geom_point(aes(y = (predict(modlistlogCu[[23]], subdatCu)+ predict(modlistlogCu[[9]], subdatCu))/2), 
-             color='blue', alpha=1/2, size=2) + 
-  geom_abline(intercept=0, slope=1) +
-  theme_classic()
-
-#Would err towards model 23 until more data are available + should try using re-categorized bing data (green 1 rather 0)
-
+############################################################################################################################################
 #--------------- C. Synthetic index ~ separate predictors ----
 modlistA <- list() #List to hold models
 modlistA[[1]] <- lm(pollution_index ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
@@ -4318,8 +3968,8 @@ saveRDS(pollutmaxscale, file = file.path(moddir, 'fieldXRFmodels_scaling.rds'))
 
 qplot(pollutfieldclean_cast[, 
                             as.integer(100*(exp(-1.8058766514 + 0.3384508984*heatsubAADTlog100frt + 
-                                                  0.0125654964*nlcd_imp_ps_mean + 0.0133221944*heatbing1902log300 +
-                                    -0.0001217836*nlcd_imp_ps_mean*heatbing1902log300)+0.5))], pollutfieldclean_cast$Zn) 
+                                                  0.0125654964*nlcd_imp_ps_mean + 0.0133221944*heatbing1902log300proj +
+                                    -0.0001217836*nlcd_imp_ps_mean*heatbing1902log300proj)+0.5))], pollutfieldclean_cast$Zn) 
 
 check2 <- fread(file.path(resdir, 'testznint2.csv'))
 check2[, SiteIDPair := paste0(F_, Pair)]
@@ -4328,16 +3978,16 @@ check2_join <- subdat33_2[check2, on='SiteIDPair']
 
 
 qplot(check2_join[, predzn33/100], check2_join[,predzn]) + geom_abline()
-qplot(check2_join[,i.heatbing1902log300], check2_join$heatbing1902log300)
+qplot(check2_join[,i.heatbing1902log300proj], check2_join$heatbing1902log300proj)
 qplot(check2_join[,i.nlcd_imp_ps_mean], check2_join$nlcd_imp_ps_mean) + geom_abline()
-qplot(check2_join[,testbing], 0.0133221944*check2_join$heatbing1902log300) + geom_abline()
+qplot(check2_join[,testbing], 0.0133221944*check2_join$heatbing1902log300proj) + geom_abline()
 
-qplot(check2_join[,(-0.0001217836*100*i.heatbing1902log300/5183)*i.nlcd_imp_ps_mean],
-      check2_join[,-0.0001217836*nlcd_imp_ps_mean*heatbing1902log300]) + geom_abline()
+qplot(check2_join[,(-0.0001217836*100*i.heatbing1902log300proj/5183)*i.nlcd_imp_ps_mean],
+      check2_join[,-0.0001217836*nlcd_imp_ps_mean*heatbing1902log300proj]) + geom_abline()
 
 #TRY THIS - AFTER RERUNNING FROM L4324
 qplot(check2_join[,testinterac],
-      check2_join[,-0.0001217836*heatbing1902log300]) + geom_abline()
+      check2_join[,-0.0001217836*heatbing1902log300proj]) + geom_abline()
 
 check3 <- fread(file.path(resdir, 'testznint3.csv'))
 check3[, SiteIDPair := paste0(F_, Pair)]
@@ -4345,42 +3995,32 @@ check3_join <- subdat33_2[check3, on='SiteIDPair']
 qplot(check3_join[, testaadt], check3_join[,heatsubAADTlog100frt]) + geom_abline()
 
 
-qplot(check2[,(-0.0001345*nlcd_imp_ps_mean*heatbing1902log300)-checkinterac], check2$checkinterac)
-
-# 
-# 
-# sarlm_mod48sub
-# stats::coef(sarlm_mod48sub)
-# base::names(stats::coef.lm(sarlm_mod48sub))
-# 
-# stats::coef(exportlist['pollutmod']$pollutmod)
-# 
-# Xp <- model.matrix(delete.response(terms(modlistA[[48]])), pollutfieldclean_cast)
-# b <- coef(modlistA[[48]])
-# yh <- c(Xp %*% b)
-# predict(modlistA[[48]], pollutfieldclean_cast)
-# 
-# 
-# coef(modlistlogCu[[23]])['heatsubAADTlog300']
-# coef(modlistlogCu[[23]])$heatsubAADTlog300
-# 
-# V <- vcov(modlistA[[48]])
-# 
-# Xp %*% V %*% t(Xp))
-# 
-# sqrt(rowSums(Xp*diag(V)))
-# Sys.getenv("PATH")
-# 
-# var.fit <- rowSums((Xp %*% V) * Xp)
-# sqrt(var.fit)
-# 
-# predict(modlistA[[48]], pollutfieldclean_cast, se.fit = TRUE)$se.fit
-# 3.8378278451-0.0038044402*
+qplot(check2[,(-0.0001345*nlcd_imp_ps_mean*heatbing1902log300proj)-checkinterac], check2$checkinterac)
 
 #--------------- B. Export data for Luwam ----
 write.csv(pollutfieldclean_cast, 
           file.path(resdir, 'map_forluwam/XRFsites_pollutiondata_forLuwam_20190530.csv'),
           row.names = F)
+
+#--------------- C. Make graph of % area vs % total pollution
+#This is a preliminary figure to show % area vs % total pollution for study area extent
+predzn33tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predzn33_tab'))
+#Percentile # of cells
+predzn33tab[order(-Value), `:=`(cumcount = cumsum(Count),
+                                cumvalue = cumsum((Value)*Count))]
+areacumpollution <- unlist(
+  sapply(round(seq(0, sum(predzn33tab$Count), sum(predzn33tab$Count)/20)), function(x) { 
+  predzn33tab[cumcount >= x, ][which.min(cumcount), cumvalue - (Value)*(cumcount-x)]/predzn33tab[, max(cumvalue)]
+})
+)
+ggplot(data.table(cumpollution = 100*areacumpollution, percarea = seq(0,100, 5)), aes(x=percarea, y=cumpollution)) +
+  geom_bar(stat = 'identity') + 
+  scale_y_continuous(expand=c(0,0), name = 'Cumulative Zn pollution (%)') +
+  scale_x_continuous(expand=c(0,0), name = 'Cumulative area, from most to least polluted (%)', limits = c(0,105)) +
+  coord_fixed() +
+  theme_classic() +
+  theme(text = element_text(size=14),
+        plot.margin= margin(0.25, 0.25, 0.25, 0.25, "cm"))
 
 
 ####################################### JUNK #############################################################

@@ -12,12 +12,13 @@ library(plyr)
 library(ggplot2)
 library(gridExtra)
 library(data.table)
+library(rprojroot)
 
 #To-do list: Install packrat and snapshot package configuration
 
 ##----------------------------------------------
 #Define directory structure
-rootdir <- "C:/Mathis/ICSL/stormwater"
+rootdir <- find_root(has_dir("src"))
 datadir <- file.path(rootdir,'data')
 resdir <- file.path(rootdir,'results')
 bindir <- file.path(rootdir,'bin')
@@ -174,8 +175,8 @@ caldf <- data.frame(elem = as.character(c('Fe','Fe','Cu','Zn','Sr','Pd')),
                     rsearch=c(0.4,0.3,0.3,0.3,1,1),
                     stringsAsFactors=FALSE)
 #Directory to get spectra from
-batchcal(file.path(datadir,paste0('XRF20180808/Original_20180718')), caldf)
-batchcal(file.path(datadir,paste0('XRF20180808/PostBrukerCalibration')), caldf)
+batchcal(file.path(datadir,paste0('XRF20190501/Original_20180718')), caldf)
+batchcal(file.path(datadir,paste0('XRF20190501/PostBrukerCalibration')), caldf)
 
 
 #-------------------------------------------------
@@ -185,11 +186,11 @@ duplexcaldf <- data.frame(elem = as.character(c('Cr','Fe','Fe','Mo')),
                     rsearch=c(0.5,0.5,0.5,0.5),
                     stringsAsFactors=FALSE)
 
-batchcal(file.path(datadir,paste0('XRF20180808/Duplextests')), duplexcaldf)
+batchcal(file.path(datadir,paste0('XRF20190501/Duplextests')), duplexcaldf)
 
 #Import and format results
-duplexspecdir <- file.path(datadir, 'XRF20180808\\Duplextests\\csv')
-duplexresdir <- file.path(datadir, 'XRF20180808\\Duplextests\\results')
+duplexspecdir <- file.path(datadir, 'XRF20190501\\Duplextests\\csv')
+duplexresdir <- file.path(datadir, 'XRF20190501\\Duplextests\\results')
 
 resfilepathvec <- file.path(duplexresdir,
                             c('duplex_test_20180816_120sec_result.csv',
@@ -227,7 +228,7 @@ resdf[86:119,'type'] <- 'recalibrated'
 fun_mean <- function(x){
   return(data.frame(y=mean(x),label=format(10^mean(x,na.rm=T), digits=2)))}
 
-png(file.path(datadir, 'XRF20180808\\Duplextests\\recalibration_summary.png'),width=16, height=8, units='in',res=300)
+png(file.path(datadir, 'XRF20190501\\Duplextests\\recalibration_summary.png'),width=16, height=8, units='in',res=300)
 ggplot(resdf, aes(x=Element,y=Net)) + 
   geom_boxplot(aes(color=type)) + 
   scale_y_log10()+

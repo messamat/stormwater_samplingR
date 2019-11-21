@@ -94,7 +94,7 @@ transformTukey_lambda <- function (x,start = -2, end = 2, int = 0.025, rastertab
       TRANS = x^lambda
     }
     if (lambda == 0) {
-      TRANS = log(xValue)
+      TRANS = log(x)
     }
     if (lambda < 0) {
       TRANS = -1 * x^lambda
