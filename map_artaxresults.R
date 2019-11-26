@@ -3569,7 +3569,7 @@ bubble(bubbledat_postsarlm, "resnorm_postsarlm", col = c("blue","red"),
 #--------------- B. Cu ~ separate predictors ----
 #Exclude 33A and 33B as way too much of an outlier site
 modlistCu <- list() #List to hold models
-subdatCu <- pollutfieldclean_cast[!(SiteID %in% c(33) | SiteIDPair %in% extraoutliers),]
+subdatCu <- pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers),]
 modlistCu[[1]] <- lm(Cu ~ 1, data = subdatCu) #Null/Intercept model
 #------ 1. Cu - Single parameter models --------
 modlistCu[[2]] <- lm(Cu ~ heatsubAADTlog200, data = subdatCu)
@@ -3753,7 +3753,6 @@ ols_correlations(modlistCu[[30]])
 vnum <- max(sapply(modlistCu, function(mod) {length(mod$coefficients)}))
 model_summaryCu<- as.data.table(
   ldply(modlistCu, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50,
-                                                          remove_outliers = 'outliers', # & leverage',
                                                           labelvec = subdatCu[, SiteIDPair])}))
 model_summaryCu[, AICc := as.numeric(AICc)]
 setorder(model_summaryCu, AICc, -R2pred)  
@@ -3803,100 +3802,12 @@ ggplot(subdat, aes(x=NLCD_reclass_final_PS, y=mod19_nooutliersub$residuals)) +
   geom_boxplot() +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
-ggplot(subdat, aes(y=predict(modlistCu[[19]], subdat), x=Cu)) +
+ggplot(subdatCu, aes(y=predict(modlistCu[[19]], subdatCu), x=Cu)) +
   geom_point(alpha=1/4, size=2) + 
-  geom_point(data=subdat, aes(y = predict(modlistCu[[19]], subdat)), alpha=1/2, size=2) + 
-  geom_point(aes(y = predict(mod19_nooutliersub, subdat)), color='red', alpha=1/2, size=2) + 
+  #geom_point(data=subdat, aes(y = predict(modlistCu[[19]], subdatCu)), alpha=1/2, size=2) + 
+  geom_point(data=subdat, aes(x=Cu, y = predict(mod19_nooutliersub, subdat)), color='red', alpha=1/2, size=2) + 
   geom_abline(intercept=0, slope=1) +
   theme_classic()
-
-
-#------ 2. log(Cu) - Multiparameter models --------
-modlistlogCu <- list() #List to hold models
-
-modlistlogCu[[17]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + heatbing1902log500proj, data = subdatCu)
-ols_regress(modlistlogCu[[17]])
-ols_plot_diagnostics(modlistlogCu[[17]])
-ols_coll_diag(modlistlogCu[[17]])
-ols_correlations(modlistlogCu[[17]])
-
-modlistlogCu[[18]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + heatbing1902log300proj, data = subdatCu)
-ols_regress(modlistlogCu[[18]])
-#ols_plot_diagnostics(modlistlogCu[[18]])
-ols_coll_diag(modlistlogCu[[18]])
-ols_correlations(modlistlogCu[[18]])
-
-modlistlogCu[[19]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean, data = subdatCu)
-ols_regress(modlistlogCu[[19]])
-#ols_plot_diagnostics(modlistlogCu[[19]])
-ols_coll_diag(modlistlogCu[[19]])
-ols_correlations(modlistlogCu[[19]])
-
-modlistlogCu[[20]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatbing1902log300proj, data = subdatCu)
-ols_regress(modlistlogCu[[20]])
-#ols_plot_diagnostics(modlistlogCu[[20]])
-ols_coll_diag(modlistlogCu[[20]])
-ols_correlations(modlistlogCu[[20]])
-
-modlistlogCu[[21]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubslopepow300_1, data = subdatCu)
-ols_regress(modlistlogCu[[21]])
-#ols_plot_diagnostics(modlistlogCu[[21]])
-ols_coll_diag(modlistlogCu[[21]])
-ols_correlations(modlistlogCu[[21]])
-
-modlistlogCu[[22]] <- lm(log(Cu) ~ heatsubspdlpow50_1 + nlcd_imp_ps_mean, data = subdatCu)
-ols_regress(modlistlogCu[[22]])
-#ols_plot_diagnostics(modlistlogCu[[22]])
-ols_coll_diag(modlistlogCu[[22]])
-ols_correlations(modlistlogCu[[22]])
-
-modlistlogCu[[23]] <- lm(log(Cu) ~ heatsubspdlpow50_1 + heatbing1902log300proj, data = subdatCu)
-ols_regress(modlistlogCu[[23]])
-#ols_plot_diagnostics(modlistlogCu[[23]])
-ols_coll_diag(modlistlogCu[[23]])
-ols_correlations(modlistlogCu[[23]])
-
-modlistlogCu[[24]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubspdlpow50_1, data = subdatCu)
-ols_regress(modlistlogCu[[24]])
-#ols_plot_diagnostics(modlistlogCu[[24]])
-ols_coll_diag(modlistlogCu[[24]])
-ols_correlations(modlistlogCu[[24]])
-
-modlistlogCu[[25]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubspdlpow50_1, data = subdatCu)
-ols_regress(modlistlogCu[[25]])
-#ols_plot_diagnostics(modlistlogCu[[25]])
-ols_coll_diag(modlistlogCu[[25]])
-ols_correlations(modlistlogCu[[25]])
-
-modlistlogCu[[26]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatbing1902log500proj, data = subdatCu)
-ols_regress(modlistlogCu[[26]])
-#ols_plot_diagnostics(modlistlogCu[[26]])
-ols_coll_diag(modlistlogCu[[26]])
-ols_correlations(modlistlogCu[[26]])
-
-modlistlogCu[[27]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean*heatbing1902log300proj, data = subdatCu)
-ols_regress(modlistlogCu[[27]])
-#ols_plot_diagnostics(modlistlogCu[[27]])
-ols_coll_diag(modlistlogCu[[27]])
-ols_correlations(modlistlogCu[[27]])
-
-modlistlogCu[[28]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubAADTlog100, data = subdatCu)
-ols_regress(modlistlogCu[[28]])
-#ols_plot_diagnostics(modlistlogCu[[28]])
-ols_coll_diag(modlistlogCu[[28]])
-ols_correlations(modlistlogCu[[28]])
-
-modlistlogCu[[29]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubAADTlog200, data = subdatCu)
-ols_regress(modlistlogCu[[29]])
-#ols_plot_diagnostics(modlistlogCu[[29]])
-ols_coll_diag(modlistlogCu[[29]])
-ols_correlations(modlistlogCu[[29]])
-
-modlistlogCu[[30]] <- lm(log(Cu) ~ heatbustransitlog200sqrt + nlcd_imp_ps_mean + heatsubAADTlog500, data = subdatCu)
-ols_regress(modlistlogCu[[30]])
-#ols_plot_diagnostics(modlistlogCu[[30]])
-ols_coll_diag(modlistlogCu[[30]])
-ols_correlations(modlistlogCu[[30]])
 
 
 #------ 6. GLM Cu - run all models for table ----
@@ -4003,7 +3914,7 @@ texi2pdf('modeltable_glmCu_2019.tex')
 
 texi2pdf('modeltable_glmCu_2019edit.tex')
 
-#------ 8. Cu - Make latex model summary table when excluding outliers ----
+#------ 8. GLM Cu - Make latex model summary table when excluding outliers ----
 vnum <- max(sapply(modlistglmCu, function(mod) {length(mod$coefficients)}))
 model_summaryglmCu_nooutliers<- as.data.table(
   ldply(modlistglmCu, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50,
@@ -4045,12 +3956,12 @@ qplot(abs(fitted(modlistglmCu[[30]])-subdatCu[, Zn]),
   labs(x='Absolute error for model glm 29 - glm transit200 + nlcd + AADT300 ', 
        y='Absolute error for model 19 - transit200 + nlcd')
 
-#------ 10. Cu - Check spatial and temporal autocorrelation of residuals for full dataset -------
+#------ 10. Cu - Check spatial and temporal autocorrelation of residuals for dataset without outliers -------
 par(mfrow=c(1,1))
-resnorm <- rstandard(modlistglmCu[[30]]) #Get standardized residuals from model
+resnorm <- rstandard(mod19_nooutliersub) #Get standardized residuals from model
 #Make bubble map of residuals
-bubbledat <- data.frame(resnorm, subdatCu$coords.x1, subdatCu$coords.x2)
-coordinates(bubbledat) <- c("subdatCu.coords.x1","subdatCu.coords.x2")
+bubbledat <- data.frame(resnorm, subdat$coords.x1, subdat$coords.x2)
+coordinates(bubbledat) <- c("subdat.coords.x1","subdat.coords.x2")
 bubble(bubbledat, "resnorm", col = c("blue","red"),
        main = "Residuals", xlab = "X-coordinates",
        ylab = "Y-coordinates")
@@ -4062,49 +3973,49 @@ plot(spline.correlog(x=coordinates(bubbledat)[,1], y=coordinates(bubbledat)[,2],
                      z=bubbledat$resnorm, resamp=500, quiet=TRUE, xmax = 5000))
 #Compute a spatial weight matrix based on IDW
 weightmat_k <- lapply(1:10, function(i) {
-  weightmat_IDW(subdatCu[, .(coords.x1, coords.x2)], knb = i, mindist = 10)}) #Based on 1-10 nearest neighbors
-weightmat_all <- weightmat_IDW(subdatCu[, .(coords.x1, coords.x2)], knb = NULL, mindist = 10) #Based on all points
+  weightmat_IDW(subdat[, .(coords.x1, coords.x2)], knb = i, mindist = 10)}) #Based on 1-10 nearest neighbors
+weightmat_all <- weightmat_IDW(subdat[, .(coords.x1, coords.x2)], knb = NULL, mindist = 10) #Based on all points
 
 #Moran plots
 #lag_resnorm <- lag.listw(weightmat_all, resnorm) #Can be used to create customized Moran plot by plotting residuals against matrix
-moran.plot(resnorm, weightmat_all, labels=subdatCu[,paste0(SiteID, Pair)], pch=19)
-moran.plot(resnorm, weightmat_k[[2]], labels=subdatCu[,paste0(SiteID, Pair)], pch=19)
+moran.plot(resnorm, weightmat_all, labels=subdat[,paste0(SiteID, Pair)], pch=19)
+moran.plot(resnorm, weightmat_k[[2]], labels=subdat[,paste0(SiteID, Pair)], pch=19)
 
 #Compute Moran's I
 "Should always only use lm.morantest for residuals from regression, see http://r-sig-geo.2731867.n2.nabble.com/Differences-between-moran-test-and-lm-morantest-td7591336.html
 for an explanation"
-lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[1]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[3]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[4]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_k[[5]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(modlistglmCu[[30]], listw = listw2U(weightmat_all)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod19_nooutliersub, listw = listw2U(weightmat_k[[1]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod19_nooutliersub, listw = listw2U(weightmat_k[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod19_nooutliersub, listw = listw2U(weightmat_k[[3]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod19_nooutliersub, listw = listw2U(weightmat_k[[4]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod19_nooutliersub, listw = listw2U(weightmat_k[[5]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod19_nooutliersub, listw = listw2U(weightmat_all)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
 
 #Test for need for spatial regression model using Lagrange Multiplier (LM) tests
-lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[1]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[2]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[3]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[4]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_k[[5]]), test=c("LMerr","RLMerr", "SARMA"))
-lm.LMtests(modlistglmCu[[30]], listw = listw2U(weightmat_all), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(mod19_nooutliersub, listw = listw2U(weightmat_k[[1]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(mod19_nooutliersub, listw = listw2U(weightmat_k[[2]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(mod19_nooutliersub, listw = listw2U(weightmat_k[[3]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(mod19_nooutliersub, listw = listw2U(weightmat_k[[4]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(mod19_nooutliersub, listw = listw2U(weightmat_k[[5]]), test=c("LMerr","RLMerr", "SARMA"))
+lm.LMtests(mod19_nooutliersub, listw = listw2U(weightmat_all), test=c("LMerr","RLMerr", "SARMA"))
 
 #Spatial simultaneous autoregressive error model estimation with 1 nearest neighbors
-sarlm_modCu <- errorsarlm(modlistCu[[19]]$call$formula, data = modlistCu[[19]]$model, 
+sarlm_modCu <- errorsarlm(mod19_nooutliersub$call$formula, data = mod19_nooutliersub$model, 
                           listw = listw2U(weightmat_k[[1]]))
 summary(sarlm_modCu)
-#Compare AIC
-AIC(sarlm_modCu)
-AIC(modlistCu[[19]])
+bptest.sarlm(sarlm_modCu)
+qplot(fitted(sarlm_modCu), sarlm_modCu$residuals)
+
 #Compare pseudo-R2
-cor(modlistCu[[19]]$model$Cu, fitted(sarlm_modCu))^2
-cor(modlistCu[[19]]$model$Cu, fitted(modlistCu[[19]]))^2
+cor(mod19_nooutliersub$model$Cu, fitted(sarlm_modCu))^2
+cor(mod19_nooutliersub$model$Cu, fitted(mod19_nooutliersub))^2
 #Compare MAE
-DescTools::MAE(modlistCu[[19]]$model$Cu, fitted(sarlm_modCu))
-DescTools::MAE(modlistCu[[19]]$model$Cu, fitted(modlistCu[[19]]))
+DescTools::MAE(mod19_nooutliersub$model$Cu, fitted(sarlm_modCu))
+DescTools::MAE(mod19_nooutliersub$model$Cu, fitted(mod19_nooutliersub))
 
 #Compare observed~predicted for full-no outlier model and for aspatial and spatial model
-spatial_comparisonplot <- ggplot(subdatCu, aes(x=fitted(sarlm_modCu), y=Cu)) + 
-  geom_point(aes(x=fitted(modlistCu[[19]])), size=2, alpha=1/2, color='orange') +
+spatial_comparisonplot <- ggplot(subdat, aes(x=fitted(sarlm_modCu), y=Cu)) + 
+  geom_point(aes(x=fitted(mod19_nooutliersub)), size=2, alpha=1/2, color='orange') +
   geom_point(size=2, alpha=1/2, color='red') + 
   geom_abline(size=1, slope=1, intercept=0, color='red') + 
   #geom_text(aes(label=paste0(SiteID, Pair))) +
@@ -4114,11 +4025,15 @@ spatial_comparisonplot
 
 resnorm_postsarlm <- residuals(sarlm_modCu) #Get standardized residuals from model
 #Make bubble map of residuals
-bubbledat_postsarlm <- data.frame(resnorm_postsarlm, subdatCu$coords.x1, subdatCu$coords.x2)
-coordinates(bubbledat_postsarlm) <- c("subdatCu.coords.x1","subdatCu.coords.x2")
+bubbledat_postsarlm <- data.frame(resnorm_postsarlm, subdat$coords.x1, subdat$coords.x2)
+coordinates(bubbledat_postsarlm) <- c("subdat.coords.x1","subdat.coords.x2")
 bubble(bubbledat_postsarlm, "resnorm_postsarlm", col = c("blue","red"),
        main = "Residuals", xlab = "X-coordinates",
        ylab = "Y-coordinates")
+
+
+
+### FINAL VERDICT: GO WITH MOD 19 TRAINED WITHOUT OUTLIERS
 
 
 #--------------- C. Synthetic pollution index (PI) ~ separate predictors ----
