@@ -12,13 +12,218 @@ library(tidyr)
 library(tseries)
 library(zoo)
 library(forecast)
+library(lme4)
+library(pls)
 
 rootdir <- find_root(has_dir("src"))
 resdir <- file.path(rootdir, "results")
 datadir <- file.path(rootdir, "data")
+AQIdir <- file.path(rootdir, 'results/airdata')
 inspectdir <- file.path(resdir, "data_inspection")
-moddir <- file.path(resdir, "data_modeling")
+moddir <- file.path(resdir, "data_modeling/Znspeciation_model")
+
+sarlmmods <- readRDS(file.path(resdir,'data_modeling/fieldXRFmodels.rds'))
+scaling <- readRDS(file.path(resdir, 'data_modeling/fieldXRFmodels_scaling.rds'))
+
+if (!(dir.exists(moddir))) {
+  dir.create(moddir)
+}
+  
 #load(file.path(rootdir, 'src/stormwater_samplingR/20190225dat.Rdata'))
+
+#### 3. Analyze daily summary data with NARR meteorological data ####
+############################################################################################################################################
+#------ Import and format NARR and Zn sensor data -----
+airNARR <- fread(file.path(resdir, 'airdat_NARRjoin.csv'), colClasses = c('integer', 'character', 'character', 'character', 'character', 'character', 'numeric',
+                                'numeric', 'character', 'character', 'character', 'character', 'Date',
+                                'character', 'character', 'integer', 'numeric', 'numeric', 'numeric', 'numeric', 'character',
+                                'character', 'character', 'character', 'character', 'character', 'character', 'character', 
+                                'character', 'Date', 'character', 'Date', 'numeric', 'numeric', rep('numeric', 34)
+                                ))
+setnames(airNARR, c("Date Local", "Arithmetic Mean", "Method Code"), c("datelocal", "specmea", "MethodCode")) 
+airNARR[, datelocal := as.Date(datelocal, format="%Y-%m-%d")]
+airNARRZn <- airNARR[!(duplicated(airNARR, by= c('UID', 'datelocal', 'Parameter Name'))) &
+                       `Parameter Name`== 'Zinc PM2.5 LC',] 
+remove(airNARR)
+NARRcols <- colnames(airNARRZn)[35:ncol(airNARRZn)] #NARR column names
+
+#Fill implicitly missing dates with explicit NAs
+# airNARRZnfill <- airNARRZn[, complete(.SD, datelocal = seq.Date(min(datelocal), max(datelocal), by='days'), 
+#                                       fill = list(value = NA)), by=UID]
+airNARRZnfill <- airNARRZn
+
+#Floor values to just below minimum detectable quantity by method
+table(airNARRZnfill$`Method Code`)
+airNARRZnfill[specmea <= 0 & MethodCode =='800', specmea := 0.0019]
+airNARRZnfill[specmea <= 0 & MethodCode =='811', specmea := 0.0014]
+airNARRZnfill[specmea <= 0 & MethodCode =='846', specmea := 0.0005]
+
+#Compute weekdays and week-standardized Zn
+weekday_levels = c('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday')
+airNARRZnfill[, `:=`(weekday = factor(weekdays(datelocal),levels= weekday_levels),
+                 week = week(datelocal))][
+                   !is.na(specmea),
+                   `:=`(week_standardized = (specmea-mean(specmea, na.rm=T))/mean(specmea, na.rm=T),
+                        weekN = .N), by=.(week, year(datelocal), UID)][
+                          weekN > 3
+                          , weekday_mean := mean(week_standardized, na.rm=T), by=.(weekday, UID)]
+
+#Compute date number on record (1 corresponding to 2014/01/01 and 2191 to 2019/12/31)
+datelist <- seq(as.Date("2014/01/01"), as.Date("2019/12/31"), by = "day")
+datedt <- data.table(datelocal=datelist, datenum = seq_along(datelist))
+airNARRZnfill <- airNARRZnfill[datedt, on='datelocal']
+
+#qplot(airNARRZnfill[, sum(is.na(specmea))/.N, by=UID]$V1) #Check % missing 
+qplot(airNARRZnfill[, mean(weekN, na.rm=T), by=UID]$V1) #Check average number of values per week
+qplot(airNARRZnfill$specmea) + scale_x_log10()
+airNARRZnfill[!is.na(specmea), .N, by=weekday]
+mean(airNARRZnfill[!is.na(specmea), .N, by=UID]$N)
+
+#------ Import, format Zn predictor variables and join -----
+predvars <- as.data.table(sf::st_read(file.path(AQIdir,'airsites.shp'))) %>%
+  .[!nlcd_imp_A == 127,]
+
+#Compute predZn
+sarlmmod_Zn <- sarlmmods$logZnmod$coefficients
+predvars[, aadtlog100frt := (aadtlog100/scaling$heatsubAADTlog100)^(1/4)][,
+   predZn := exp(sarlmmod_Zn['(Intercept)'] + 
+                   sarlmmod_Zn['heatsubAADTlog100frt']*aadtlog100frt +
+                   sarlmmod_Zn['nlcd_imp_ps_mean']*nlcd_imp_A)]
+
+#Join with NARR and speciation data
+airNARRZnjoin <- airNARRZnfill[predvars, on='UID']
+
+#------ Develop partial least-square regression with NARR variables and weekday for each station with more than 100 obs-----
+#Remove all records with NA values in meteorological variables
+airNARRZn_nona <- airNARRZnjoin[complete.cases(airNARRZnjoin[,NARRcols, with=F]),]
+
+#Select only stations with >100 records
+Nobs <- airNARRZn_nona[!is.na(specmea), .N, by=.(UID)]
+selectedstations <- Nobs[N>100,UID]
+
+#Scale NARR variables (z-standardize)
+airNARRZn_nona[, (NARRcols) := lapply(.SD, scale), .SDcols=NARRcols]
+
+#station <- "4813916083899"
+for (station in selectedstations) { #will change to apply at some point
+  print(station)
+  #For each station
+  stationdat <- airNARRZn_nona[UID==station,]
+  
+  #Develop plsr format to predict residuals from week days
+  pls_format <- data.frame(
+    weekday = stationdat$weekday,
+    specmea = stationdat$specmea,
+    logspecmea = log(stationdat$specmea),
+    NARRvars = I(as.matrix(stationdat[,NARRcols, with=F]))
+  )
+  plsr1 <- plsr(logspecmea ~ NARRvars, ncomp = 5, data = pls_format, validation = "LOO")
+  png(file.path(moddir, paste0('CVplot_', station, '.png')))
+  compsel <- selectNcomp(plsr1, nperm=1000, alpha=0.5, method = "randomization", plot = TRUE)
+  title(paste0('UID: ', station))
+  dev.off()
+  
+  plsR2 <- R2(plsr1, ncomp=compsel)$val[2]
+  predarray <- predict(plsr1, ncomp=compsel)
+  
+  if (compsel > 0){
+    airNARRZn_nona[UID==station, plspred := exp(predarray)]
+    png(file.path(moddir, paste0('residplot_', station, '.png')))
+    plsplot <- qplot(as.vector(predarray), airNARRZn_nona[UID==station,specmea]) + 
+      geom_abline() + 
+      annotate("text", x=-Inf, y=Inf, label =paste0('R2:', round(plsR2,2)), hjust = -0.25, vjust = 1) +
+      labs(title=paste0('UID: ', station)) + 
+      theme_classic()
+    print(plsplot)
+    dev.off()
+    
+    #Create dataframe where all meteorological variables are 0 (US-wide average for prediction)
+    predat <- data.frame(matrix(data=0, nrow=nrow(stationdat), ncol=length(NARRcols)))
+    colnames(predat) <- NARRcols
+    predat$NARRvars <- I(as.matrix(predat[,NARRcols]))
+    #Generate predicted Zn level given mean meteorology + residuals
+    airNARRZn_nona[UID==station, Znspecpred := exp(predict(plsr1, ncomp=compsel, newdata = predat))][
+      UID==station, Znspecpred_nometeo := plspred + as.vector(residuals(plsr1, comp=compsel)[1:nrow(stationdat), 1, 4])]
+  } else {
+    airNARRZn_nona[UID==station, Znspecpred_nometeo := specmea]
+  }
+}
+
+#Develop model based on weekday
+glm0 <- glm(Znspecpred_nometeo ~ 1, data=airNARRZn_nona[UID %in% selectedstations,])
+summary(glm0)
+
+glm1 <- glm(Znspecpred_nometeo ~ weekday, data=airNARRZn_nona[UID %in% selectedstations,])
+summary(glm1)
+
+glm2 <- glm(Znspecpred_nometeo ~ weekday + datenum, data=airNARRZn_nona[UID %in% selectedstations,])
+summary(glm2)
+
+glm3 <- glm(Znspecpred_nometeo ~ 0 + UID + weekday + datenum, data=airNARRZn_nona[UID %in% selectedstations,])
+summary(glm3)
+
+#
+glm3coefs <- coefficients(glm3)[grep('UID.*', names(coefficients(glm3)), perl=T)]
+dtformat <- data.table(UID = gsub('UID', '', names(glm3coefs)), Znspec_mean = glm3coefs)
+predZnformat <- airNARRZn_nona[UID %in% selectedstations, .(predZn = max(predZn),
+                                                            specmea_mean = mean(specmea),
+                                                            specmea_median = median(specmea),
+                                                            N = .N),by=UID]
+dtformatmerge <- merge(dtformat, predZnformat, by='UID')
+
+ggplot(dtformatmerge, aes(x=predZn, y=Znspec_mean)) + 
+  geom_point() + 
+  geom_smooth()
+
+ggplot(dtformatmerge, aes(x=specmea_mean, y=specmea_median)) + 
+  geom_point()
+
+#Try to predict mean Zn speciation without any modification
+ggplot(dtformatmerge, aes(x=predZn, y=log(specmea_mean))) + 
+  geom_point() + 
+  geom_smooth()
+lm1 <- lm(log(specmea_mean)~log(predZn), data=dtformatmerge)
+summary(lm1)
+
+gam1 <- mgcv::gam(log(specmea_mean)~s(predZn), data=dtformatmerge)
+summary(gam1)
+plot(gam1, residuals=T)
+
+#Try to predict median Zn speciation without any modification
+ggplot(dtformatmerge, aes(x=predZn, y=log(specmea_median))) + 
+  geom_point() + 
+  geom_smooth()
+lm1 <- lm(log(specmea_median)~log(predZn), data=dtformatmerge)
+summary(lm1)
+
+gam1 <- mgcv::gam(log(specmea_median)~s(predZn), data=dtformatmerge)
+summary(gam1)
+plot(gam1, residuals=T)
+
+
+#Check relationships
+ggplot(airNARRZnjoin, aes(x=hgt.850_max_6daymax_x, y=mod2resids)) + 
+  geom_point()
+ggplot(airNARRZnjoin, aes(x=rhum.2m.mean, y=mod2resids)) + 
+  geom_point()
+ggplot(airNARRZnjoin, aes(x=wspd.10m.max_3daymin, y=mod2resids)) + 
+  geom_point()
+ggplot(airNARRZnjoin, aes(x=vwnd.500_min, y=mod2resids)) + 
+  geom_point()
+ggplot(airNARRZnjoin, aes(x=lftx4.nightmin, y=mod2resids)) + 
+  geom_point()
+ggplot(airNARRZnjoin, aes(x=dswrf.daymin_None_6daymax, y=mod2resids)) + 
+  geom_point()
+ggplot(airNARRZnjoin, aes(x=pres.sfc.max, y=mod2resids)) + 
+  geom_point()
+ggplot(airNARRZnjoin, aes(x=wspd.10m.daymean, y=mod2resids)) + 
+  geom_point()
+ggplot(airNARRZnjoin, aes(x=shum.2m.daymean, y=mod2resids)) + 
+  geom_point()
+
+###################################################################################
+#Local linear penalize regression 
+#Time series model of average accounting for day of the week
 
 ##### 1. Analyze annual summary data ####
 ############################################################################################################################################
@@ -67,7 +272,7 @@ sefit <- predict(Zngam, se.fit = T)
 MAE(AQIZn[`Parameter Name`=='Zinc (TSP) STP',mean15_18], fitted(Zngam))
 
 AQIZn_pred <- ggplot(AQIZn[`Parameter Name`=='Zinc (TSP) STP' & totalcount>=50,], 
-       aes(x=predZn, y=mean15_18)) + 
+                     aes(x=predZn, y=mean15_18)) + 
   # geom_point(data = AQIZn[`Parameter Name`=='Zinc PM2.5 LC' & `Observation Count`>=48,],
   #            color='grey') +
   geom_point(aes(color=Location.S)) +
@@ -162,11 +367,11 @@ qplot(AQIZn$yearN) # Histogram of # of records
 #Average across methods and remove UID-Date duplicates (because of multiple methods)
 AQIZn[, methmean := mean(specmea), by=.(UID, date)][
   , methdiff := 100*(max(specmea)-min(specmea))/methmean, by=.(UID, date)]
-     
+
 ggplot(AQIZn, aes(methmean, methdiff)) +
-         geom_point() +
-         scale_y_sqrt() +
-         scale_x_sqrt()
+  geom_point() +
+  scale_y_sqrt() +
+  scale_x_sqrt()
 
 ###############################################################################################
 # Try fitting a model for one station
@@ -229,7 +434,7 @@ ggplot(teststation, aes(x=date, y=specmea, group=UID)) +
   geom_point(aes(y=windmea), color = 'darkgreen') +
   geom_point(aes(y=rhmea), color='blue') +
   theme_classic()
-  
+
 ggplot(teststation, aes(x=tempmea, y=specmea)) +
   geom_point()
 ggplot(teststation, aes(x=windmea, y=specmea)) +
@@ -561,58 +766,3 @@ c(fit$AICc, fit_covobs$AICc, fit_covproc$AICc, fit_covobs_wd$AICc, fit_covproc_w
 
 
 #------------- Add # of antecedent days without winds  ---------------------####
-
-
-#### 3. Analyze daily summary data with NARR meteorological data ####
-############################################################################################################################################
-airNARR <- fread(file.path(resdir, 'airdat_NARRjoin.csv')) 
-setnames(airNARR, c("Date Local", "Arithmetic Mean"), c("datelocal", "specmea")) 
-airNARR[, datelocal := as.Date(datelocal, format="%Y-%m-%d")]
-airNARRZn <- airNARR[!(duplicated(airNARR, by= c('UID', 'datelocal', 'Parameter Name'))) &
-                       `Parameter Name`== 'Zinc PM2.5 LC',] 
-NARRcols <- colnames(airNARRZn)[32:ncol(airNARRZn)] #NARR column names
-
-#Floor values to 0 (when negative)
-table(airNARRZnfill$specmea)
-airNARRZn[specmea <= 0, specmea := 0.0001]
-
-#Fill implicitly missing dates with explicit NAs
-airNARRZnfill <- airNARRZn[, complete(.SD, datelocal = seq.Date(min(datelocal), max(datelocal), by='days'), 
-                                      fill = list(value = NA)), by=UID]
-
-
-#Compute weekdays and week-standardized Zn
-weekday_levels = c('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday')
-airNARRZnfill[, `:=`(weekday = factor(weekdays(datelocal),levels= weekday_levels),
-                 week = week(datelocal))][
-                   !is.na(specmea),
-                   `:=`(week_standardized = (specmea-mean(specmea, na.rm=T))/mean(specmea, na.rm=T),
-                        weekN = .N), by=.(week, year(datelocal), UID)][
-                          weekN > 3
-                          , weekday_mean := mean(week_standardized, na.rm=T), by=.(weekday, UID)]
-
-qplot(airNARRZnfill[, sum(is.na(specmea))/.N, by=UID]$V1) #Check % missing 
-qplot(airNARRZnfill[, mean(weekN, na.rm=T), by=UID]$V1) #Check average number of values per week
-qplot(airNARRZnfill$specmea) + scale_x_log10()
-airNARRZnfill[!is.na(specmea), .N, by=weekday]
-glm(specmea ~ as.factor(UID) + weekday, family= gaussian(link='log'), data=airNARRZnfill[!is.na(specmea),])
-
-
-
-
-
-#------------- Make union of time series -------------####
-tssub <- as.ts(read.zoo(airsub))
-tsspec <- airsub[ts(specmea, frequency=7)]
-decompose(tsspec)
-
-acf(tssub[, 'specmea'], na.action = na.pass)
-auto.arima(tssub[, 'specmea']) 
-auto.arima(tsspec7) #Too many missing values
-
-
-
-
-###################################################################################
-#Local linear penalize regression 
-#Time series model of average accounting for day of the week
