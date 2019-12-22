@@ -4867,69 +4867,6 @@ pollutmaxscale <- dcast(pollutfieldclean[!is.na(mean)],
                         value.var= 'mean')[, lapply(.SD, max), .SDcols = heatcols]
 saveRDS(pollutmaxscale, file = file.path(moddir, 'fieldXRFmodels_scaling.rds'))
 
-#--------------- C. Check predictions  -----
-predtab<- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='sitescheck')) 
-predtab <- predtab[,SiteIDPair := factor(paste0(F_, Pair))][pollutfieldclean_cast, on='SiteIDPair']
-predtab[, `:=`(sarlm_modPIaadt =  sarlm_modPI$coefficients[2]*heatsubAADTlog100thd,
-               sarlm_modPIbus = sarlm_modPI$coefficients[3]*i.heatbustransitpow100_1,
-               sarlm_modPInlcd = sarlm_modPI$coefficients[4]*nlcd_imp_ps_mean)]
-
-predtab[, sarlmpredpi := sarlm_modPI$coefficients[1]+
-          sarlm_modPI$coefficients[2]*heatsubAADTlog100thd+
-          sarlm_modPI$coefficients[3]*i.heatbustransitpow100_1 +
-          sarlm_modPI$coefficients[4]*nlcd_imp_ps_mean
-        ]
-
-ggplot(predtab, aes(x=predpiaadt, y=sarlm_modPIaadt)) + 
-  geom_point() + 
-  geom_abline()
-
-ggplot(predtab, aes(x=predpinlcd, y=sarlm_modPInlcd)) + 
-  geom_point() + 
-  geom_abline()
-
-ggplot(predtab, aes(x=predpitransit, y=sarlm_modPIbus)) + 
-  geom_point() + 
-  geom_abline()
-
-ggplot(predtab, aes(x=predpi30, y=sarlmpredpi)) + 
-  geom_point() + 
-  geom_abline()
-
-
-sarlm_modPI$coefficients[1]+sarlm_modPI$coefficients[2]
-
-qplot(pollutfieldclean_cast[, 
-                            as.integer(100*(exp(-1.8058766514 + 0.3384508984*heatsubAADTlog100frt + 
-                                                  0.0125654964*nlcd_imp_ps_mean + 0.0133221944*heatbing1902log300proj +
-                                                  -0.0001217836*nlcd_imp_ps_mean*heatbing1902log300proj)+0.5))], pollutfieldclean_cast$Znstand) 
-
-check2 <- fread(file.path(resdir, 'testznint2.csv'))
-check2[, SiteIDPair := paste0(F_, Pair)]
-subdat33_2[,predZnstand := fitted(modlistglmZnstand[[33]])]
-check2_join <- subdat33_2[check2, on='SiteIDPair']
-
-
-qplot(check2_join[, predZnstand33/100], check2_join[,predZnstand]) + geom_abline()
-qplot(check2_join[,i.heatbing1902log300proj], check2_join$heatbing1902log300proj)
-qplot(check2_join[,i.nlcd_imp_ps_mean], check2_join$nlcd_imp_ps_mean) + geom_abline()
-qplot(check2_join[,testbing], 0.0133221944*check2_join$heatbing1902log300proj) + geom_abline()
-
-qplot(check2_join[,(-0.0001217836*100*i.heatbing1902log300proj/5183)*i.nlcd_imp_ps_mean],
-      check2_join[,-0.0001217836*nlcd_imp_ps_mean*heatbing1902log300proj]) + geom_abline()
-
-#TRY THIS - AFTER RERUNNING FROM L4324
-qplot(check2_join[,testinterac],
-      check2_join[,-0.0001217836*heatbing1902log300proj]) + geom_abline()
-
-check3 <- fread(file.path(resdir, 'testZnstandint3.csv'))
-check3[, SiteIDPair := paste0(F_, Pair)]
-check3_join <- subdat33_2[check3, on='SiteIDPair']
-qplot(check3_join[, testaadt], check3_join[,heatsubAADTlog100frt]) + geom_abline()
-
-
-qplot(check2[,(-0.0001345*nlcd_imp_ps_mean*heatbing1902log300proj)-checkinterac], check2$checkinterac)
-
 #--------------- B. Export data for Luwam ----
 write.csv(pollutfieldclean_cast, 
           file.path(resdir, 'map_forluwam/XRFsites_pollutiondata_forLuwam_20190530.csv'),
@@ -5039,7 +4976,7 @@ gplotCu <- ggplot(pollutfieldclean_cast[SiteIDPair %in% subdat$SiteIDPair,],
 
 gplotPI<- ggplot(pollutfieldclean_cast[SiteIDPair %in% subdatPI$SiteIDPair,], 
                  aes(x=predPI_sarlm, y=pollution_index)) +
-  geom_point(alpha=1/2, size=2, color = '#762a83') + 
+  geom_point(alpha=1/2, size=2, color = '#762a83') +  
   geom_point(data=pollutfieldclean_cast[!(SiteIDPair %in% subdatPI$SiteIDPair),], color='#525252', size=2, alpha=0.75) + 
   geom_abline(intercept=0, slope=1) +
   scale_y_continuous(limits=c(0,75), expand=c(0,0), name = 'Observed pollution index') + 
@@ -5065,25 +5002,76 @@ pdf(file.path(moddir, 'scatterplots_ZnCuPI_20191220.pdf'), width=4, height=4)
 grid.draw(cbind(arrangeGrob(gg_tableZn, gg_tablePI), arrangeGrob(gg_tableCu, rectGrob(gp=gpar(col=NA)))))
 dev.off()
 
+#--------------- C. Check predictions  -----
+predtab<- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='sitescheck')) 
+predtab <- predtab[,SiteIDPair := factor(paste0(F_, Pair))][pollutfieldclean_cast, on='SiteIDPair']
+
+qplot(predtab$predPI_sarlm, predtab$predpi30)
+qplot(predtab$predCu_sarlm, predtab$predcu19)
+qplot(predtab$predZn_sarlm, predtab$predzn36)
+
+#Export residuals
+pollutfieldclean_cast[, `:=`(
+  predZn_resid = (predZn_sarlm - Znstand)/Znstand,
+  predCu_resid = (predCu_sarlm - Custand)/Custand,
+  predPI_resid = (predPI_sarlm - pollution_index)/pollution_index)]
+write.dbf(pollutfieldclean_cast, file.path(moddir, 'pollutfieldclean_cast.dbf'))
+
+
 #--------------- E. Make graph of % area vs % total pollution -----
 #This is a preliminary figure to show % area vs % total pollution for study area extent
 predzntab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predzn36_tab'))
+predcutab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcu_tab'))
+predpitab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predpi_tab'))
+
+predtabs <- rbind(cbind(predzntab, 'predzn'), cbind(predcutab, 'predcu'), cbind(predpitab, 'predpi'))
+predtabs[, Value_stand := (Value - min(Value))/(max(Value)-min(Value)),by=V2]
+
 #Percentile # of cells
-predzntab[order(-Value), `:=`(cumcount = cumsum(Count),
-                              cumvalue = cumsum((Value)*Count))]
-areacumpollution <- unlist(
-  sapply(round(seq(0, sum(predzntab$Count), sum(predzntab$Count)/20)), function(x) { 
-    predzntab[cumcount >= x, ][which.min(cumcount), cumvalue - (Value)*(cumcount-x)]/predzntab[, max(cumvalue)]
-  })
-)
-ggplot(data.table(cumpollution = 100*areacumpollution, percarea = seq(0,100, 5)), aes(x=percarea, y=cumpollution)) +
-  geom_bar(stat = 'identity') + 
-  scale_y_continuous(expand=c(0,0), name = 'Cumulative Zn pollution (%)') +
-  scale_x_continuous(expand=c(0,0), name = 'Cumulative area, from most to least polluted (%)', limits = c(0,105)) +
+predtabs[order(-Value_stand), `:=`(cumcount = cumsum(Count),
+                                   cumvalue = cumsum((Value_stand)*Count)), by=V2]
+
+predzntab <- predtabs[V2 == 'predzn',]
+
+#Function to compute cumulative area and pollution from raster attribute
+cumpollutarea <- function(tab) {
+  outcum <- unlist(
+    sapply(round(seq(0, sum(tab$Count), sum(tab$Count)/1000)), function(x) { 
+      tab[cumcount >= x, ][which.min(cumcount), cumvalue - (Value_stand)*(cumcount-x)]/tab[, max(cumvalue)]
+    })
+  )
+  return(outcum)
+}
+
+cumsumdt <- data.table (cumpollution = 100*c(cumpollutarea(predtabs[V2 == 'predzn',]),
+                                             cumpollutarea(predtabs[V2 == 'predcu',]),
+                                             cumpollutarea(predtabs[V2 == 'predpi',])),
+                        percarea = rep(seq(0,100, 0.1), 3),
+                        var = factor(c(rep('cumzn', 1001), rep('cumcu', 1001), rep('cumpi', 1001)), levels=c('cumzn', 'cumcu', 'cumpi')))
+
+
+cumplot <- ggplot(cumsumdt[var %in% c('cumzn', 'cumcu')], aes(x=percarea, y=cumpollution)) +
+  #geom_bar(aes(fill=var), stat = 'identity', alpha=0.5, position = "identity") + 
+  #geom_area(aes(fill=var), stat = 'identity', alpha=0.3, position = "identity") +
+  geom_vline(xintercept = cumsumdt[cumpollution>=50 & var == 'cumzn', min(percarea)], size=1, color='#01665e') +
+  geom_vline(xintercept = cumsumdt[cumpollution>=50 & var == 'cumcu', min(percarea)], size=1, color='#543005') +
+  geom_hline(yintercept = 50, color='black') +
+  geom_line(aes(color=var), size=1, alpha=1) +
+  scale_y_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50, 100), name = 'Cumulative pollution (%)') +
+  scale_x_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50), name = 'Cumulative area, from\n most to least polluted (%)', limits = c(0,50)) +
   coord_fixed() +
   theme_classic() +
+  #scale_color_manual(values = c('#35978f', '#8c510a','#762a83')) + 
+  scale_fill_manual(values = c('#35978f', '#8c510a','#762a83')) + 
+  #facet_wrap(~var, ncol=1) +
   theme(text = element_text(size=14),
+        legend.position = 'None', 
+        strip.background = element_blank(),
+        strip.text.x = element_blank(),
         plot.margin= margin(0.25, 0.25, 0.25, 0.25, "cm"))
+pdf(file.path(moddir, 'cumpollution_cumarea.pdf'), width=3, height=5)
+cumplot
+dev.off()
 
 
 ####################################### JUNK #############################################################

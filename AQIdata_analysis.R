@@ -95,6 +95,8 @@ airNARRZnAlfill <- airNARRZnAlfill[datedt, on='datelocal']
 #qplot(airNARRZnAlfill[, sum(is.na(specmea))/.N, by=UID]$V1) #Check % missing 
 qplot(airNARRZnAlfill[, mean(weekN, na.rm=T), by=UID]$V1) #Check average number of values per week
 
+
+
 qplot(airNARRZnAlfill$specmeaZn) + scale_x_log10()
 qplot(airNARRZnAlfill$specmeaAl) + scale_x_log10()
 qplot(airNARRZnAlfill[,specmeaZn/specmeaAl])
@@ -110,7 +112,7 @@ predvars <- as.data.table(sf::st_read(file.path(AQIdir,'airsites.shp'))) %>%
   .[!nlcd_imp_A == 127,]
 
 #Compute predZn
-sarlmmod_Zn <- sarlmmods$logZnmod$coefficients
+sarlmmod_Zn <- sarlmmods$logZnstandmod$coefficients
 predvars[, aadtlog100frt := (aadtlog100/scaling$heatsubAADTlog100)^(1/4)][,
                                                                           predZn := exp(sarlmmod_Zn['(Intercept)'] + 
                                                                                           sarlmmod_Zn['heatsubAADTlog100frt']*aadtlog100frt +
@@ -186,8 +188,8 @@ for (station in selectedstations) { #will change to apply at some point
   #Develop plsr format to predict residuals from week days
   pls_format <- data.frame(
     weekday = stationdat$weekday,
-    specmearatio = stationdat$specmea,
-    logitspecmearatio = Logit(stationdat$specmea),
+    specmea = stationdat$specmeaZn,
+    logspecmea = log(stationdat$specmeaZn),
     NARRvars = I(as.matrix(stationdat[,NARRcols, with=F]))
   )
   plsr1 <- plsr(logspecmea ~ NARRvars, ncomp = 5, data = pls_format, validation = "LOO")
@@ -221,7 +223,7 @@ for (station in selectedstations) { #will change to apply at some point
     airNARRZnAl_nona[UID==station, Znspecpred := exp(predict(plsr1, ncomp=compsel, newdata = predat))][
       UID==station, Znspecpred_nometeo := plspred + as.vector(residuals(plsr1, comp=compsel)[1:nrow(stationdat), 1, compsel])]
   } else {
-    airNARRZnAl_nona[UID==station, Znspecpred_nometeo := specmea]
+    airNARRZnAl_nona[UID==station, Znspecpred_nometeo := specmeaZn]
   }
 }
 
@@ -249,8 +251,8 @@ predZnformat <- airNARRZnAl_nona[UID %in% selectedstations, .(predZn = max(predZ
                                                               specmea_nometeomedian = median(Znspecpred_nometeo),
                                                               specmea_nometeo70th = quantile(Znspecpred_nometeo, 0.7),
                                                               specmea_nometeo90th = quantile(Znspecpred_nometeo, 0.9),
-                                                              specmea_mean = mean(specmea),
-                                                              specmea_median = median(specmea),
+                                                              specmeaZn_mean = mean(specmeaZn),
+                                                              specmeaZn_median = median(specmeaZn),
                                                               nlcd_imp_A = mean(nlcd_imp_A),
                                                               aadtlog100frt = mean(aadtlog100frt),
                                                               N = .N), by=UID]
@@ -282,7 +284,141 @@ ggplot(dtformatmerge, aes(x=predZn, y=specmea_nometeo70th)) +
   geom_point() + 
   geom_smooth()
 
+#------ PLSR for long-term Zn data + NARR variables of all stations with more than 200 obs together -----
+#Remove effects of weekday and method
+glm0 <- glm(specmeaZn ~ 1, data=airNARRZnAl_nona[UID %in% selectedstations,])
+summary(glm0)
 
+glm_weekday <- glm(specmeaZn ~ weekday*UID, data=airNARRZnAl_nona[UID %in% selectedstations,], family= gaussian(link='log'))
+summary(glm_weekday)
+airNARRZnAl_nonaMonday <- airNARRZnAl_nona[UID %in% selectedstations,][, weekday := "Monday"]
+airNARRZnAl_nonaMonday[, specmeaZn_monday := exp(predict(glm_weekday, airNARRZnAl_nonaMonday)) + (specmeaZn-exp(fitted(glm_weekday)))]
+
+dtformatmerge <- merge(dtformatmerge, airNARRZnAl_nonaMonday[, .(specmeaZn_monday_mean = mean(specmeaZn_monday),
+                                                                 specmeaZn_monday_median = median(specmeaZn_monday)),
+                                                             by=.(UID)],
+                       by = 'UID')
+
+
+# glm_weekdaymethod <- glm(log(specmeaZn) ~ weekday*UID + MethodCode, data=airNARRZnAl_nona[UID %in% selectedstations,])
+# summary(glm_weekdaymethod)
+# coefficients(glm_weekdaymethod)
+
+#Check long-term relationships with NARR variables
+for (var in NARRcols) {
+  print(var)
+  png(file.path(moddir, paste0('NARRZnspecplot_', var, '.png')))
+  narrplot <- ggplot(dtformatmerge, aes_string(x=var, y='specmeaZn_mean')) + 
+    geom_point() + 
+    geom_smooth() +
+    theme_classic()
+  print(narrplot)
+  dev.off()
+}
+
+#Develop plsr format
+plsall_format <- data.frame(
+  specmeaZn = dtformatmerge$specmeaZn_mean,
+  logspecmeaZn = log(dtformatmerge$specmeaZn_mean),
+  specmeaZnMonday = dtformatmerge$specmeaZn_monday_mean,
+  predZn = dtformatmerge$predZn,
+  NARRvars = I(as.matrix(dtformatmerge[,NARRcols, with=F])),
+  NARRvarsZn = I(as.matrix(dtformatmerge[,c(NARRcols, 'predZn'), with=F]))
+)
+
+#With just NARR variables
+plsrall_narr <- plsr(logspecmeaZn ~ NARRvars, ncomp = 10, data = plsall_format, validation = "LOO")
+compsel <- selectNcomp(plsrall_narr, nperm=1000, alpha=0.05, method = "randomization", plot = TRUE)
+plsR2NARR <- R2(plsrall_narr, ncomp=compsel)$val[2]
+predarrayNARR <- predict(plsrall_narr, ncomp=compsel)
+
+dtformatmerge[, `:=`(plspredNARR = exp(predarrayNARR),
+                     plsresidNARR = exp(predarrayNARR)-specmeaZn_mean)]
+
+
+png(file.path(moddir, paste0('residplot_allnarr.png')))
+plsplotNARR <- ggplot(dtformatmerge, aes(1000*plspredNARR, 1000*specmeaZn_mean)) + 
+  geom_abline() + 
+  geom_point(alpha = 0.6, size=1.5) +
+  scale_y_log10(name = expression(Observed~average~Zn~PM[2.5]~(mg/m^3)),limits = c(0.7, 120)) +
+  scale_x_log10(name = expression(Predicted~average~Zn~PM[2.5]~(mg/m^3)), limits = c(0.7, 120)) +
+  annotate("text", x=10, y=100, vjust=-1, #hjust=0.80, 
+           label =paste0('A.~Meteorology-only~~R^2 ==', round(plsR2NARR,2)), parse=T, size=4) + 
+  coord_fixed(clip='off') +
+  theme_classic() + 
+  theme(text = element_text(size=12),
+        #axis.title.x = element_blank(), 
+        plot.margin = margin(0.6, 0.25, 0, 0.25, "cm"),
+        rect = element_rect(fill = "transparent"))
+print(plsplotNARR)
+dev.off()
+
+ggplot(dtformatmerge, aes(x=predZn, y=plsresidNARR)) + 
+  geom_point() + 
+  geom_smooth(method='lm') 
+  
+gam_plsrallresid<- (mgcv::gam(plsresid~s(predZn, k=4), data=dtformatmerge))
+summary(gam_plsrallresid)
+plot(gam_plsrallresid, rug = TRUE, residuals = TRUE, pch = 1, cex = 1)
+
+#With NARR and Zn
+plsrall_narrZn <- plsr(logspecmeaZn ~ NARRvarsZn, ncomp = 10, data = plsall_format, validation = "LOO")
+compsel <- selectNcomp(plsrall_narrZn, nperm=1000, alpha=0.05, method = "randomization", plot = TRUE)
+plsR2 <- R2(plsrall_narrZn)$val[compsel]
+predarray <- predict(plsrall_narrZn, ncomp=compsel)
+
+dtformatmerge[, `:=`(plspred = exp(predarray),
+                     plsresid = exp(predarray)-specmeaZn_mean,
+                     plsresidper = (exp(predarray)-specmeaZn_mean)/specmeaZn_mean)]
+
+png(file.path(moddir, paste0('residplot_allnarrZn.png')))
+plsplot <- ggplot(dtformatmerge, aes(1000*plspred, 1000*specmeaZn_mean)) + 
+  geom_abline() +
+  geom_point(alpha = 0.6, size=1.5) +
+  scale_y_log10(name = expression(Observed~average~Zn~PM[2.5]~(mg/m^3)),limits = c(0.7, 120)) +
+  scale_x_log10(name = expression(Predicted~average~Zn~PM[2.5]~(mg/m^3)), limits = c(0.7, 120)) +
+  annotate("text", x=10, y=100, vjust=-1, #hjust=0.60, 
+           label =paste0('B.~Meteorology+modeled~Zn~~R^2 ==', round(plsR2,2)), parse=T, size=4) + 
+  coord_fixed(clip='off') +
+  theme_classic() + 
+  theme(text = element_text(size=12),
+        plot.margin = margin(0.6, 0.25, 0, 0.25, "cm"),
+        rect = element_rect(fill = "transparent"))
+print(plsplot)
+dev.off()
+print(plsplot)
+summary(plsrall_narrZn)
+loadings(plsrall_narrZn)
+
+png(file.path(moddir, 'AQImodels_plsrZn.png'), width=7, height=3.5, units='in', res=600)
+grid.arrange(plsplotNARR, plsplot, ncol=2)
+dev.off()
+
+write.dbf(dtformatmerge[,.(UID, plspred, specmeaZn_mean, plsresid, plsresidper)], 
+          file.path(moddir, 'AQIdata_analysis_dtformatmerge.dbf'))
+
+#With NARR and Zn controlling for weekday
+plsrall_narrZnMonday <- plsr(specmeaZnMonday ~ NARRvarsZn, ncomp = 10, data = plsall_format, validation = "LOO")
+compsel <- selectNcomp(plsrall_narrZnMonday, nperm=1000, alpha=0.05, method = "randomization", plot = TRUE)
+plsR2 <- R2(plsrall_narrZnMonday)$val[compsel]
+predarray <- predict(plsrall_narrZnMonday, ncomp=compsel)
+
+dtformatmerge[, `:=`(plspred = exp(predarray),
+                     plsresid = specmeaZn_monday_mean-exp(predarray))]
+
+png(file.path(moddir, paste0('residplot_allnarrZnMonday.png')))
+plsplot <- qplot(dtformatmerge$plspred, dtformatmerge[,specmeaZn_monday_mean]) + 
+  geom_abline() + 
+  annotate("text", x=0.0015, y=0.1, label =paste0('R2:', round(plsR2,2))) + 
+  coord_fixed() +
+  theme_classic()
+print(plsplot)
+dev.off()
+print(plsplot)
+summary(plsrall_narrZnMonday)
+loadings(plsrall_narrZnMonday)
+
+###################################### NOT USED ############################################################################################
 #------ PLSR for daily data of Zn/Al + NARR variables at each station with more than 200 obs -----
 #station <- "4813916083899" #for debugging
 for (station in selectedstations) { #will change to apply at some point
@@ -404,119 +540,6 @@ ggplot(dtformatmerge[meteocorrected == 1,], aes(x=predZn, y=specmearatio_nometeo
   geom_smooth() + 
   scale_y_log10() + 
   scale_x_log10()
-
-#------ PLSR for long-term Zn data + NARR variables of all stations with more than 200 obs together -----
-#Remove effects of weekday and method
-glm0 <- glm(specmeaZn ~ 1, data=airNARRZnAl_nona[UID %in% selectedstations,])
-summary(glm0)
-
-glm_weekday <- glm(specmeaZn ~ weekday*UID, data=airNARRZnAl_nona[UID %in% selectedstations,], family= gaussian(link='log'))
-summary(glm_weekday)
-airNARRZnAl_nonaMonday <- airNARRZnAl_nona[UID %in% selectedstations,][, weekday := "Monday"]
-airNARRZnAl_nonaMonday[, specmeaZn_monday := exp(predict(glm_weekday, airNARRZnAl_nonaMonday)) + (specmeaZn-exp(fitted(glm_weekday)))]
-
-dtformatmerge <- merge(dtformatmerge, airNARRZnAl_nonaMonday[, .(specmeaZn_monday_mean = mean(specmeaZn_monday),
-                                                                 specmeaZn_monday_median = median(specmeaZn_monday)),
-                                                             by=.(UID)],
-                       by = 'UID')
-
-
-glm_weekdaymethod <- glm(log(specmeaZn) ~ weekday*UID + MethodCode, data=airNARRZnAl_nona[UID %in% selectedstations,])
-summary(glm_weekdaymethod)
-coefficients(glm_weekdaymethod)
-
-#Check long-term relationships with NARR variables
-for (var in NARRcols) {
-  print(var)
-  png(file.path(moddir, paste0('NARRZnspecplot_', var, '.png')))
-  narrplot <- ggplot(dtformatmerge, aes_string(x=var, y='specmeaZn_mean')) + 
-    geom_point() + 
-    geom_smooth() +
-    theme_classic()
-  print(narrplot)
-  dev.off()
-}
-
-#Develop plsr format
-plsall_format <- data.frame(
-  specmeaZn = dtformatmerge$specmeaZn_mean,
-  logspecmeaZn = log(dtformatmerge$specmeaZn_mean),
-  specmeaZnMonday = dtformatmerge$specmeaZn_monday_mean,
-  predZn = dtformatmerge$predZn,
-  NARRvars = I(as.matrix(dtformatmerge[,NARRcols, with=F])),
-  NARRvarsZn = I(as.matrix(dtformatmerge[,c(NARRcols, 'predZn'), with=F]))
-)
-
-#With just NARR variables
-plsrall_narr <- plsr(logspecmeaZn ~ NARRvars, ncomp = 10, data = plsall_format, validation = "LOO")
-compsel <- selectNcomp(plsrall_narr, nperm=1000, alpha=0.05, method = "randomization", plot = TRUE)
-plsR2 <- R2(plsrall_narr, ncomp=compsel)$val[2]
-predarray <- predict(plsrall_narr, ncomp=compsel)
-
-dtformatmerge[, `:=`(plspred = exp(predarray),
-                     plsresid = specmeaZn_mean-exp(predarray))]
-
-png(file.path(moddir, paste0('residplot_allnarr.png')))
-plsplot <- qplot(dtformatmerge$plspred, dtformatmerge[,specmeaZn_mean]) + 
-  geom_abline() + 
-  scale_y_log10() +
-  scale_x_log10() +
-  annotate("text", x=0.0015, y=0.1, label =paste0('R2:', round(plsR2,2))) + 
-  coord_fixed() +
-  theme_classic()
-print(plsplot)
-dev.off()
-
-ggplot(dtformatmerge, aes(x=predZn, y=plsresid)) + 
-  geom_point() + 
-  geom_smooth()
-gam_plsrallresid<- (mgcv::gam(plsresid~s(predZn), data=dtformatmerge))
-summary(gam_plsrallresid)
-plot(gam_plsrallresid, rug = TRUE, residuals = TRUE, pch = 1, cex = 1)
-
-#With NARR and Zn
-plsrall_narrZn <- plsr(logspecmeaZn ~ NARRvarsZn, ncomp = 10, data = plsall_format, validation = "LOO")
-compsel <- selectNcomp(plsrall_narrZn, nperm=1000, alpha=0.05, method = "randomization", plot = TRUE)
-plsR2 <- R2(plsrall_narrZn)$val[compsel]
-predarray <- predict(plsrall_narrZn, ncomp=compsel)
-
-dtformatmerge[, `:=`(plspred = exp(predarray),
-                     plsresid = specmeaZn_mean-exp(predarray))]
-
-png(file.path(moddir, paste0('residplot_allnarrZn.png')))
-plsplot <- qplot(dtformatmerge$plspred, dtformatmerge[,specmeaZn_mean]) + 
-  geom_abline() + 
-  scale_y_log10() +
-  scale_x_log10() +
-  annotate("text", x=0.0015, y=0.1, label =paste0('R2:', round(plsR2,2))) + 
-  coord_fixed() +
-  theme_classic()
-print(plsplot)
-dev.off()
-print(plsplot)
-summary(plsrall_narrZn)
-loadings(plsrall_narrZn)
-
-#With NARR and Zn controlling for weekday
-plsrall_narrZnMonday <- plsr(specmeaZnMonday ~ NARRvarsZn, ncomp = 10, data = plsall_format, validation = "LOO")
-compsel <- selectNcomp(plsrall_narrZnMonday, nperm=1000, alpha=0.05, method = "randomization", plot = TRUE)
-plsR2 <- R2(plsrall_narrZnMonday)$val[compsel]
-predarray <- predict(plsrall_narrZnMonday, ncomp=compsel)
-
-dtformatmerge[, `:=`(plspred = exp(predarray),
-                     plsresid = specmeaZn_monday_mean-exp(predarray))]
-
-png(file.path(moddir, paste0('residplot_allnarrZnMonday.png')))
-plsplot <- qplot(dtformatmerge$plspred, dtformatmerge[,specmeaZn_monday_mean]) + 
-  geom_abline() + 
-  annotate("text", x=0.0015, y=0.1, label =paste0('R2:', round(plsR2,2))) + 
-  coord_fixed() +
-  theme_classic()
-print(plsplot)
-dev.off()
-print(plsplot)
-summary(plsrall_narrZnMonday)
-loadings(plsrall_narrZnMonday)
 
 #------ PLSR for long-term Zn/Al data + NARR variables of all stations with more than 200 obs together -----
 #Remove effects of weekday and method
@@ -706,7 +729,6 @@ plot(gam3, residuals=T)
 
 
 
-###################################### NOT USED ############################################################################################
 #################################################
 ##### 1. Analyze annual summary data ####
 ############################################################################################################################################
