@@ -5018,60 +5018,113 @@ pollutfieldclean_cast[, `:=`(
 write.dbf(pollutfieldclean_cast, file.path(moddir, 'pollutfieldclean_cast.dbf'))
 
 
-#--------------- E. Make graph of % area vs % total pollution -----
+#--------------- E. Make graph of % area vs % total pollution + population + EJ -----
+#Get data on blockgroup dimensions and populations in PS watershed
+EJWA <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer="EJWA_PS"))
+EJWA[, quantile(Shape_Area, c(0.25,0.5,0.75))]/1000000
+EJWA[, list(median(ACSTOTPOP), mean(ACSTOTPOP))]
+
 #This is a preliminary figure to show % area vs % total pollution for study area extent
-predzntab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predzn36_tab'))
+predzntab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predzn_tab'))
 predcutab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcu_tab'))
 predpitab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predpi_tab'))
 
-predtabs <- rbind(cbind(predzntab, 'predzn'), cbind(predcutab, 'predcu'), cbind(predpitab, 'predpi'))
-predtabs[, Value_stand := (Value - min(Value))/(max(Value)-min(Value)),by=V2]
+EJWApixelpop10000tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='EJWApixelpop10000sub_tab'))
+EJWApixeldipop10000tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='EJWApixeldipop10000sub_tab'))
+predznpop10000_tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predznpop10000_tab'))
+predcupop10000_tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcupop10000_tab'))
+predzndiratio10000_tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predzndiratio10000_tab'))
+predcudiratio10000_tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcudiratio10000_tab'))
+
+#Aggregate table
+weightingtab_zn <- rbind(cbind(predzntab, Target='predmetal'),
+                         cbind(EJWApixelpop10000tab, Target='pop'), 
+                         cbind(EJWApixeldipop10000tab, Target='diweight'),
+                         cbind(predznpop10000_tab, Target='predmetalpop'),
+                         cbind(predzndiratio10000_tab, Target='predmetaldi'))
+
+weightingtab_cu <- rbind(cbind(predzntab, Target='predmetal'),
+                         cbind(EJWApixelpop10000tab, Target='pop'), 
+                         cbind(EJWApixeldipop10000tab, Target='diweight'),
+                         cbind(predcupop10000_tab, Target='predmetalpop'),
+                         cbind(predcudiratio10000_tab, Target='predmetaldi'))
+
+weightingtab_join <- rbind(cbind(weightingtab_zn, Metal='Zn'),
+                           cbind(weightingtab_cu, Metal='Cu'))
+
+
+#One graph for Cu, another for Zn
+#Show accumulation by pollution only, population only, and DI ratio*population, pollution*population and population*DI ratio*population
+
 
 #Percentile # of cells
-predtabs[order(-Value_stand), `:=`(cumcount = cumsum(Count),
-                                   cumvalue = cumsum((Value_stand)*Count)), by=V2]
+weightingtab_join[order(-Value), `:=`(cumcount = cumsum(Count),
+                                      cumvalue = cumsum((Value)*Count)), by=.(Target, Metal)]
 
-predzntab <- predtabs[V2 == 'predzn',]
 
+###########
 #Function to compute cumulative area and pollution from raster attribute
 cumpollutarea <- function(tab) {
   outcum <- unlist(
     sapply(round(seq(0, sum(tab$Count), sum(tab$Count)/1000)), function(x) { 
-      tab[cumcount >= x, ][which.min(cumcount), cumvalue - (Value_stand)*(cumcount-x)]/tab[, max(cumvalue)]
+      tab[cumcount >= x, ][which.min(cumcount), cumvalue - (Value)*(cumcount-x)]/tab[, max(cumvalue)]
     })
   )
   return(outcum)
 }
 
-cumsumdt <- data.table (cumpollution = 100*c(cumpollutarea(predtabs[V2 == 'predzn',]),
-                                             cumpollutarea(predtabs[V2 == 'predcu',]),
-                                             cumpollutarea(predtabs[V2 == 'predpi',])),
-                        percarea = rep(seq(0,100, 0.1), 3),
-                        var = factor(c(rep('cumzn', 1001), rep('cumcu', 1001), rep('cumpi', 1001)), levels=c('cumzn', 'cumcu', 'cumpi')))
+cumcalc <- function(x, met) {
+  data.table(
+    cumval = cumpollutarea(weightingtab_join[Target == x & Metal==met,]),
+    percarea = seq(0,100, 0.1),
+    Target = rep(x, 1001),
+    Metal = rep(met, 1001)
+  )
+}
+
+valgrid <- weightingtab_join[, expand.grid(x=unique(Target), met=unique(Metal))]
+cumdt <- rbindlist(mapply(cumcalc, valgrid$x, valgrid$met, SIMPLIFY = FALSE, USE.NAMES = FALSE))
+
+colorpal <- c('#0773B2', '#E69F25', '#D35F27', '#05A072', '#CC79A7')
+vline_labels <- cbind(
+  cumdt[cumval>=0.5, min(percarea), by=.(Target, Metal)],
+  color = rep(colorpal,2)) %>% 
+  setorder(V1)
 
 
-cumplot <- ggplot(cumsumdt[var %in% c('cumzn', 'cumcu')], aes(x=percarea, y=cumpollution)) +
-  #geom_bar(aes(fill=var), stat = 'identity', alpha=0.5, position = "identity") + 
-  #geom_area(aes(fill=var), stat = 'identity', alpha=0.3, position = "identity") +
-  geom_vline(xintercept = cumsumdt[cumpollution>=50 & var == 'cumzn', min(percarea)], size=1, color='#01665e') +
-  geom_vline(xintercept = cumsumdt[cumpollution>=50 & var == 'cumcu', min(percarea)], size=1, color='#543005') +
-  geom_hline(yintercept = 50, color='black') +
-  geom_line(aes(color=var), size=1, alpha=1) +
-  scale_y_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50, 100), name = 'Cumulative pollution (%)') +
-  scale_x_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50), name = 'Cumulative area, from\n most to least polluted (%)', limits = c(0,50)) +
+cumplot <- ggplot(cumdt, aes(x=percarea, y=100*cumval, color=Target, linetype=Metal)) +
+  #geom_bar(aes(fill=Target), stat = 'identity', alpha=0.5, position = "identity") + 
+  #geom_area(aes(fill=Target), stat = 'identity', alpha=0.3, position = "identity") +
+  geom_vline(data=cumdt[cumval>=0.5, min(percarea), by=.(Target, Metal)], alpha=1/2,
+             aes(xintercept = V1, color=Target, linetype=Metal)) + #, color='#01665e') +
+  geom_hline(yintercept = 50, color='black', alpha=1/2) +
+  geom_line(aes(), size=1.2, alpha=1) +
+  scale_y_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50, 100), name = 'Cumulative weight (%)') +
+  scale_x_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50, 75), name = 'Cumulative area, from\n most to least weight (%)', limits = c(0,75)) +
   coord_fixed() +
   theme_classic() +
-  #scale_color_manual(values = c('#35978f', '#8c510a','#762a83')) + 
-  scale_fill_manual(values = c('#35978f', '#8c510a','#762a83')) + 
-  #facet_wrap(~var, ncol=1) +
-  theme(text = element_text(size=14),
-        legend.position = 'None', 
+  # annotate(geom='text',angle=45,
+  #          color=vline_labels$color, 
+  #          label=vline_labels$V1 , 
+  #          x=vline_labels$V1, 
+  #          y= 3*c(0.25, 0.75, 1.5, 1.5, 0.25, 0.75, 1.5, 1.5, 0.25, 0.25)) +
+  scale_color_manual(values = colorpal ,
+                     labels = c('aquatic-only (i)', 'population-only (ii)', 'EJ-only (iii)', 
+                                'pollution-population (iv)', 'pollution-EJ (v)')) + 
+  #facet_wrap(~Metal, ncol=1) +
+  theme(text = element_text(size=12),
+        #legend.position = 'None', 
         strip.background = element_blank(),
-        strip.text.x = element_blank(),
+        #strip.text.x = element_blank(),
         plot.margin= margin(0.25, 0.25, 0.25, 0.25, "cm"))
-pdf(file.path(moddir, 'cumpollution_cumarea.pdf'), width=3, height=5)
+cumplot
+
+
+#pdf(file.path(moddir, 'cumpollution_cumarea.pdf'), width=6, height=5)
+png(file.path(moddir, 'cumpollution_cumarea.png'), width=6, height=5, units = 'in', res=600)
 cumplot
 dev.off()
+
 
 
 ####################################### JUNK #############################################################
