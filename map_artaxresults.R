@@ -5026,6 +5026,9 @@ predzntab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gd
 predcutab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcu_tab'))
 predpitab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predpi_tab'))
 
+predznhightab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predznhighway_tab'))
+predcuhightab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcuhighway_tab'))
+predpihightab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predpihighway_tab'))
 
 #Get data on blockgroup dimensions and populations in PS watershed
 EJWA <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer="EJWA_PS"))
@@ -5035,8 +5038,12 @@ EJWA[, list(median(ACSTOTPOP), mean(ACSTOTPOP))]
 #Make scatterplot of pollution vs EJ index
 sampledpoints <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='randompoints_ps'))
 sampledpoints_sub <- sampledpoints[!is.na(EJWApixeldipop10000sub), !"SHAPE"] %>%
-  melt(id.vars='EJWApixeldipop10000sub', value.vars=c("predzn36indexland", "predcu19indexland")) %>%
-  .[is.na(value), value:=0]
+  melt(id.vars=c('EJWApixeldipop10000sub', 'hpmstiger_PS_urbanhighways_buf500ras'),
+       value.vars=c("predzn36indexland", "predcu19indexland")) %>%
+  .[is.na(value), value:=0] %>%
+  .[, highway := fifelse(is.na(hpmstiger_PS_urbanhighways_buf500ras),
+                         'Beyond 500m from urban highway',
+                         'Within 500m from urban highway')]
 
 EJmetals_scatter <- ggplot(sampledpoints_sub, 
                            aes(x=100*EJWApixeldipop10000sub/max(sampledpoints_sub$EJWApixeldipop10000sub), 
@@ -5050,51 +5057,82 @@ EJmetals_scatter <- ggplot(sampledpoints_sub,
   scale_x_sqrt(expand=c(0,0), breaks=c(0,1,10,25,50,75,100), name= 'Environmental Justice index (scaled)') + 
   scale_y_sqrt(limits=c(0,100), expand=c(0,0), breaks=c(0,1,10,25,50,75,100), name='Metal index') + 
   coord_fixed() +
+  facet_wrap(~highway) +
   theme_classic() + 
-  theme(text = element_text(size=12))
+  theme(text = element_text(size=12),
+        legend.title = element_blank())
 
-png(file.path(moddir, 'EJindex_metalpollution_scatterplot_20200301.png'), width=6, height=5, units = 'in', res=600)
+png(file.path(moddir, 'EJindex_metalpollution_scatterplot_20200531.png'), width=10, height=8, units = 'in', res=600)
 #pdf(file.path(moddir, 'EJindex_metalpollution_scatterplot_20200301.pdf'), width=6, height=5)
 EJmetals_scatter
 dev.off()
 
-
-
 #This is a preliminary figure to show % area vs % total pollution for study area extent
-
 EJWApixelpop10000tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='EJWApixelpop10000sub_tab'))
 EJWApixeldipop10000tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='EJWApixeldipop10000sub_tab'))
-predznpop10000_tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predznpop10000_tab'))
-predcupop10000_tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcupop10000_tab'))
-predzndiratio10000_tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predzndiratio10000_tab'))
-predcudiratio10000_tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcudiratio10000_tab'))
+predznpop10000tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predznpop10000_tab'))
+predcupop10000tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcupop10000_tab'))
+predzndiratio10000tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predzndiratio10000_tab'))
+predcudiratio10000tab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcudiratio10000_tab'))
 
-#Aggregate table
+EJWApixelpop10000hightab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='EJWApixelpop10000subhighway_tab'))
+EJWApixeldipop10000hightab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='EJWApixeldipop10000subhighway_tab'))
+predznpop10000hightab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predznpop10000highway_tab'))
+predcupop10000hightab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcupop10000highway_tab'))
+predzndiratio10000hightab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predzndiratio10000highway_tab'))
+predcudiratio10000hightab <- as.data.table(sf::st_read(dsn = file.path(resdir, 'PSpredictions.gdb'), layer='predcudiratio10000highway_tab'))
+
+#Aggregate tables
 weightingtab_zn <- rbind(cbind(predzntab, Target='predmetal'),
                          cbind(EJWApixelpop10000tab, Target='pop'), 
                          cbind(EJWApixeldipop10000tab, Target='diweight'),
-                         cbind(predznpop10000_tab, Target='predmetalpop'),
-                         cbind(predzndiratio10000_tab, Target='predmetaldi'))
+                         cbind(predznpop10000tab, Target='predmetalpop'),
+                         cbind(predzndiratio10000tab, Target='predmetaldi'))
 
 weightingtab_cu <- rbind(cbind(predzntab, Target='predmetal'),
                          cbind(EJWApixelpop10000tab, Target='pop'), 
                          cbind(EJWApixeldipop10000tab, Target='diweight'),
-                         cbind(predcupop10000_tab, Target='predmetalpop'),
-                         cbind(predcudiratio10000_tab, Target='predmetaldi'))
+                         cbind(predcupop10000tab, Target='predmetalpop'),
+                         cbind(predcudiratio10000tab, Target='predmetaldi'))
 
 weightingtab_join <- rbind(cbind(weightingtab_zn, Metal='Zn'),
                            cbind(weightingtab_cu, Metal='Cu'))
 
 
+weightingtab_znhigh <- rbind(cbind(predznhightab, Target='predmetal'),
+                         cbind(EJWApixelpop10000hightab, Target='pop'), 
+                         cbind(EJWApixeldipop10000hightab, Target='diweight'),
+                         cbind(predznpop10000hightab, Target='predmetalpop'),
+                         cbind(predzndiratio10000hightab, Target='predmetaldi'))
+
+weightingtab_cuhigh <- rbind(cbind(predznhightab, Target='predmetal'),
+                         cbind(EJWApixelpop10000hightab, Target='pop'), 
+                         cbind(EJWApixeldipop10000hightab, Target='diweight'),
+                         cbind(predcupop10000hightab, Target='predmetalpop'),
+                         cbind(predcudiratio10000hightab, Target='predmetaldi'))
+
+weightingtab_joinhigh <- rbind(cbind(weightingtab_znhigh, Metal='Zn'),
+                           cbind(weightingtab_cuhigh, Metal='Cu'))
+
+weightingtab_joinall <- merge(weightingtab_join,
+                              weightingtab_joinhigh, 
+                              by=c('Value', 'Metal', 'Target'),
+                              all.x=T, all.y=T, suffixes = c("", "_highway")) %>%
+  .[is.na(Count_highway), Count_highway := 0] %>%
+  .[, Count_nohighway := Count - Count_highway] %>%
+  melt(id.vars=c('Metal', 'Target', 'Value'), 
+       value.name = 'Count', variable.name = 'Variable')
+  
 #One graph for Cu, another for Zn
 #Show accumulation by pollution only, population only, and DI ratio*population, pollution*population and population*DI ratio*population
 
 
 #Percentile # of cells
-weightingtab_join[order(-Value), `:=`(cumcount = cumsum(Count),
-                                      cumvalue = cumsum((Value)*Count)), by=.(Target, Metal)]
+weightingtab_joinall[order(-Value), `:=`(cumcount = cumsum(Count),
+                                         cumvalue = cumsum((Value)*Count)), 
+                     by=.(Target, Metal, Variable)]
 
-#Function to compute cumulative area and pollution from raster attribute
+#Function to compute cumulative area and pollution from raster attribute (messy set up but it works)
 cumpollutarea <- function(tab) {
   outcum <- unlist(
     sapply(round(seq(0, sum(tab$Count), sum(tab$Count)/1000)), function(x) { 
@@ -5104,34 +5142,63 @@ cumpollutarea <- function(tab) {
   return(outcum)
 }
 
-cumcalc <- function(x, met) {
+cumcalc <- function(x, met, countvar) {
   data.table(
-    cumval = cumpollutarea(weightingtab_join[Target == x & Metal==met,]),
+    cumval = cumpollutarea(
+      weightingtab_joinall[!is.na(Count) & 
+                             Target == x & 
+                             Metal==met & 
+                             Variable==countvar,]),
     percarea = seq(0,100, 0.1),
     Target = rep(x, 1001),
-    Metal = rep(met, 1001)
+    Metal = rep(met, 1001),
+    Variable = rep(countvar, 1001)
   )
 }
 
-valgrid <- weightingtab_join[, expand.grid(x=unique(Target), met=unique(Metal))]
-cumdt <- rbindlist(mapply(cumcalc, valgrid$x, valgrid$met, SIMPLIFY = FALSE, USE.NAMES = FALSE))
+valgrid <- weightingtab_joinall[, expand.grid(x=unique(Target), 
+                                              met=unique(Metal))]
 
-colorpal <- c('#0773B2', '#E69F25', '#D35F27', '#05A072', '#CC79A7')
+cumdt <- lapply(unique(weightingtab_joinall$Variable), function(countvar) {
+  rbindlist(mapply(cumcalc, valgrid$x, valgrid$met, countvar,
+                   SIMPLIFY = FALSE, USE.NAMES = FALSE))
+}) %>%
+  rbindlist()
+
+
+targetsel <- c('predmetal', 'predmetaldi')
+subtab <- cumdt[Target %in% targetsel,] %>%
+  .[, Variable := factor(Variable, 
+                         levels=c('Count', 
+                                  'Count_nohighway', 
+                                  'Count_highway'),
+                         labels=c('All', 
+                                  '> 500 m from highway', 
+                                  '< 500 m for highway'))]
+
+colorpal <- c('#D35F27','#0773B2', '#E69F25','#CC79A7', '#05A072') %>%
+  .[seq_along(targetsel)]
 vline_labels <- cbind(
-  cumdt[cumval>=0.5, min(percarea), by=.(Target, Metal)],
+  subtab[cumval>=0.5, min(percarea), by=.(Target, Metal)],
   color = rep(colorpal,2)) %>% 
   setorder(V1)
 
+vlinetab <- subtab[cumval>=0.5, min(percarea), 
+                   by=.(Target, Metal, Variable)]
 
-cumplot <- ggplot(cumdt, aes(x=percarea, y=100*cumval, color=Target, linetype=Metal)) +
+#Only look at metal-only prioritization and metal+EJ*pop proritization
+cumplot <- ggplot(subtab, aes(x=percarea, y=100*cumval, color=Target, linetype=Metal)) +
   #geom_bar(aes(fill=Target), stat = 'identity', alpha=0.5, position = "identity") + 
   #geom_area(aes(fill=Target), stat = 'identity', alpha=0.3, position = "identity") +
-  geom_vline(data=cumdt[cumval>=0.5, min(percarea), by=.(Target, Metal)], alpha=1/2,
+  geom_vline(data=vlinetab, alpha=1/2,
              aes(xintercept = V1, color=Target, linetype=Metal)) + #, color='#01665e') +
   geom_hline(yintercept = 50, color='black', alpha=1/2) +
   geom_line(aes(), size=1.2, alpha=1) +
-  scale_y_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50, 100), name = 'Cumulative weight (%)') +
-  scale_x_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50, 75), name = 'Cumulative area, from\n most to least weight (%)', limits = c(0,75)) +
+  scale_y_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50, 100),
+               name = 'Cumulative weight (%)') +
+  scale_x_sqrt(expand=c(0,0), breaks = c(0, 1, 5, 10, 25, 50, 100), 
+               name = 'Cumulative area, from\n most to least weight (%)',
+               limits = c(0,100)) +
   coord_fixed() +
   theme_classic() +
   # annotate(geom='text',angle=45,
@@ -5139,10 +5206,9 @@ cumplot <- ggplot(cumdt, aes(x=percarea, y=100*cumval, color=Target, linetype=Me
   #          label=vline_labels$V1 , 
   #          x=vline_labels$V1, 
   #          y= 3*c(0.25, 0.75, 1.5, 1.5, 0.25, 0.75, 1.5, 1.5, 0.25, 0.25)) +
-  scale_color_manual(values = colorpal ,
-                     labels = c('aquatic-only (i)', 'population-only (ii)', 'EJ-only (iii)', 
-                                'pollution-population (iv)', 'pollution-EJ (v)')) + 
-  #facet_wrap(~Metal, ncol=1) +
+  scale_color_manual(values = colorpal[1:length(unique(subtab$Target))],
+                     labels = c('pollution-only', 'pollution-EJ (v)')) +  #c('pollution-only', 'population-only (ii)', 'EJ-only (iii)', 'pollution-population (iv)', 'pollution-EJ (v)'))
+  facet_wrap(~Variable, ncol=1) +
   theme(text = element_text(size=12),
         #legend.position = 'None', 
         strip.background = element_blank(),
@@ -5150,11 +5216,16 @@ cumplot <- ggplot(cumdt, aes(x=percarea, y=100*cumval, color=Target, linetype=Me
         plot.margin= margin(0.25, 0.25, 0.25, 0.25, "cm"))
 cumplot
 
-
 #pdf(file.path(moddir, 'cumpollution_cumarea.pdf'), width=6, height=5)
-png(file.path(moddir, 'cumpollution_cumarea.png'), width=6, height=5, units = 'in', res=600)
+png(file.path(moddir, 'cumpollution_cumarea.png'), width=4, height=8, 
+    units = 'in', res=600)
 cumplot
 dev.off()
+
+
+kable(vlinetab) %>%
+  kable_styling("striped", full_width = F) %>%
+  save_kable(file.path(moddir, 'cumpollution_cumarea_50lines.doc'), self_contained=T)
 
 
 ####################################### JUNK #############################################################
