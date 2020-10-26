@@ -9,7 +9,7 @@ library(ggplot2)
 library(data.table)
 
 #### ------ Get example traffic map to get resolution from ----- #####
-res <- 'C:/Mathis/ICSL/stormwater/results/bing'
+res <- 'D:/ICSL/stormwater/results/bing'
 reclassmlc <- file.path(res,"181204_02_00_class_mlc.tif")
 
 #### ------ Function to produce kernel ----- #####
@@ -92,7 +92,8 @@ xbind <- data.table(do.call("rbind", replicate(length(powlist), xmelt, simplify 
 xbind[,ypow:= 1-((abs(value)^(1/p))/(Var2^(1/p)))] #Power
 xbind[,ylog2:= 1-(log2(abs(value)+1))/(log2(Var2+1))] #Logarithm
 #Plot 'em
-ggplot(xbind, aes(x=value, y=ypow, color = interaction(p, Var2))) +
-  geom_line(size=1.2) +
-  geom_line(aes(y= ylog2, group=factor(Var2)), color = 'black', size=1.2, alpha=1/2) +
-  labs(x='Distance (meters)', y='Relative value') + theme_bw()
+ggplot(xbind, aes(x=value, y=ypow, group=interaction(Var2, p)),color = 'black') +
+  #scale_color_distiller(palette='Spectral') +
+  geom_line(size=1, alpha=1/4) +
+  geom_line(aes(y= ylog2, group=factor(Var2)), color = 'black', size=1, alpha=1/4) +
+  labs(x='Distance (meters)', y='Relative value') + theme_classic()
