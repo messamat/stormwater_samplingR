@@ -1757,7 +1757,7 @@ modlistPI[[1]] <- lm(pollution_index ~ 1, data = pollutfieldclean_cast) #Null/In
 modlistPI[[2]] <- lm(pollution_index ~ nlcd_imp_ps_mean, data = pollutfieldclean_cast)
 ols_regress(modlistPI[[2]])
 #ols_plot_diagnostics(modlistPI[[2]])
-ggplot(pollutfieldclean_cast, aes(x=nlcd_imp_ps_mean, y=pollution_index, label=SiteIDPair)) + 
+ggplot(pollutfieldclean_cast, aes(x=nlcd_imp_ps_mean, y=pollution_index_old, label=SiteIDPair)) + 
   geom_text()
 
 modlistPI[[3]] <- lm(pollution_index ~ nlcd_imp_ps, data = pollutfieldclean_cast)
@@ -1933,11 +1933,12 @@ ols_regress(modlistPI[[30]])
 ols_coll_diag(modlistPI[[30]])
 ols_correlations(modlistPI[[30]])
 
-modlistPI[[31]] <- lm(pollution_index ~ heatsubAADTlog100 + heatbustransitpow100_1thd + nlcd_imp_ps_mean, data = pollutfieldclean_cast)
+modlistPI[[31]] <- lm(pollution_index ~ heatsubAADTlog100 + heatbustransitpow100_1thd +
+                        nlcd_imp_ps_mean, data = pollutfieldclean_cast)
 ols_regress(modlistPI[[31]])
-#ols_plot_diagnostics(modlistPI[[30]])
-ols_coll_diag(modlistPI[[30]])
-ols_correlations(modlistPI[[30]])
+#ols_plot_diagnostics(modlistPI[[31]])
+ols_coll_diag(modlistPI[[31]])
+ols_correlations(modlistPI[[31]])
 
 modlistPI[[32]] <- lm(pollution_index ~ heatsubAADTlog100*heatbustransitpow100_1 + nlcd_imp_ps_mean, data = pollutfieldclean_cast)
 ols_regress(modlistPI[[32]])
@@ -1963,39 +1964,49 @@ ols_regress(modlistPI[[35]])
 ols_coll_diag(modlistPI[[35]])
 ols_correlations(modlistPI[[35]])
 
-
 #------ 3. PI - Make latex model summary table ----
 vnum <- max(sapply(modlistPI, function(mod) {length(mod$coefficients)}))
 model_summary<- as.data.table(
   ldply(modlistPI, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, kCV = TRUE, k=10, cvreps=50)}))
 setorder(model_summary, -R2pred, AICc)  
-cat(latex_format(model_summary), file = file.path(moddir, 'modeltable_pollutionindex_2019.tex'))
+cat(latex_format(model_summary), file = file.path(moddir, 'modeltable_pollutionindex_2020.tex'))
 setwd(moddir)
-texi2pdf('modeltable_pollutionindex_2019.tex')
+texi2pdf('modeltable_pollutionindex_2020.tex')
 
 #------ 4. PI - Make latex model summary table when excluding outliers ----
 model_summary_nooutliers <- as.data.table(
-  ldply(modlistPI, function(mod) {regdiagnostic_customtab(mod, maxpar=vnum, 
-                                                          remove_outliers = 'outliers',
-                                                          labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)],
-                                                          kCV = TRUE, k=10, cvreps=50)}))
+  ldply(modlistPI, function(mod) {
+    regdiagnostic_customtab(mod, maxpar=vnum, 
+                            remove_outliers = 'outliers',
+                            labelvec = pollutfieldclean_cast[, paste0(SiteID, Pair)],
+                            kCV = TRUE, k=10, cvreps=50)}))
 setorder(model_summary_nooutliers, -R2pred, AICc)  
 
 model_summarypollutionindex_nooutliers_edit <- latex_format(model_summary_nooutliers) 
-model_summarypollutionindex_nooutliers_edit <- gsub("pow100\\_1", "linear", model_summarypollutionindex_nooutliers_edit, fixed=T) 
-model_summarypollutionindex_nooutliers_edit <- gsub("spdl", "speed", model_summarypollutionindex_nooutliers_edit) 
-model_summarypollutionindex_nooutliers_edit <- gsub("nlcd\\_imp\\_ps", "imperviousness", model_summarypollutionindex_nooutliers_edit, fixed=T) 
-model_summarypollutionindex_nooutliers_edit <- gsub("mean", "smooth", model_summarypollutionindex_nooutliers_edit, fixed=T) 
-model_summarypollutionindex_nooutliers_edit <- gsub("bing1902", "congestion", model_summarypollutionindex_nooutliers_edit, fixed=T) 
-model_summarypollutionindex_nooutliers_edit <- gsub("bustransit", "transit", model_summarypollutionindex_nooutliers_edit, fixed=T) 
-model_summarypollutionindex_nooutliers_edit <- gsub("sub", "", model_summarypollutionindex_nooutliers_edit, fixed=T) 
-model_summarypollutionindex_nooutliers_edit <- gsub("proj", "", model_summarypollutionindex_nooutliers_edit, fixed=T) 
-model_summarypollutionindex_nooutliers_edit <- gsub("paperheight[=]10in[,]paperwidth[=]35in", "paperheight=8in,paperwidth=27in",
-                                                    model_summarypollutionindex_nooutliers_edit) 
+model_summarypollutionindex_nooutliers_edit <- gsub(
+  "pow100\\_1", "linear", model_summarypollutionindex_nooutliers_edit, fixed=T) 
+model_summarypollutionindex_nooutliers_edit <- gsub(
+  "spdl", "speed", model_summarypollutionindex_nooutliers_edit) 
+model_summarypollutionindex_nooutliers_edit <- gsub(
+  "nlcd\\_imp\\_ps", "imperviousness", model_summarypollutionindex_nooutliers_edit, fixed=T) 
+model_summarypollutionindex_nooutliers_edit <- gsub(
+  "mean", "smooth", model_summarypollutionindex_nooutliers_edit, fixed=T) 
+model_summarypollutionindex_nooutliers_edit <- gsub(
+  "bing1902", "congestion", model_summarypollutionindex_nooutliers_edit, fixed=T) 
+model_summarypollutionindex_nooutliers_edit <- gsub(
+  "bustransit", "transit", model_summarypollutionindex_nooutliers_edit, fixed=T) 
+model_summarypollutionindex_nooutliers_edit <- gsub(
+  "sub", "", model_summarypollutionindex_nooutliers_edit, fixed=T) 
+model_summarypollutionindex_nooutliers_edit <- gsub(
+  "proj", "", model_summarypollutionindex_nooutliers_edit, fixed=T) 
+model_summarypollutionindex_nooutliers_edit <- gsub(
+  "paperheight[=]10in[,]paperwidth[=]35in", "paperheight=8in,paperwidth=27in",
+  model_summarypollutionindex_nooutliers_edit) 
 
-cat(model_summarypollutionindex_nooutliers_edit, file = file.path(moddir, 'modeltable_pollutionindex_nooutliers_2019.tex'))
+cat(model_summarypollutionindex_nooutliers_edit, 
+    file = file.path(moddir, 'modeltable_pollutionindex_nooutliers_2020.tex'))
 setwd(moddir)
-texi2pdf('modeltable_pollutionindex_nooutliers_2019.tex')
+texi2pdf('modeltable_pollutionindex_nooutliers_2020.tex')
 
 #------ 5. log PI - Run models for table -----
 modlistlogPI <- list() #List to hold models
@@ -2125,23 +2136,23 @@ logmod30_nooutliers <- regdiagnostic_customtab(modlistlogPI[[30]], maxpar=vnum,
                                                kCV = TRUE, k=10, cvreps=50)
 subdatPI <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
                                       strsplit(gsub('\\\\', '', logmod30_nooutliers['outliers']), ',')$outliers),]
-logPImod_seasoncheck <- lm(logPI ~ heatsubAADTlog100thd + heatbustransitpow100_1 + nlcd_imp_ps_mean, 
+logmodlistPI[[31]] <- lm(logPI ~ heatsubAADTlog100thd + heatbustransitpow100_1 + nlcd_imp_ps_mean, 
                             data = subdatPI)
-summary(logPImod_seasoncheck)
+summary(logmodlistPI[[31]])
 logmod30_nooutliers['outliers']
-ols_plot_diagnostics(logPImod_seasoncheck)
+ols_plot_diagnostics(logmodlistPI[[31]])
 logmod30_nooutliers
-AICc(logPImod_seasoncheck)
-qplot(subdat$heatbing1902log500proj, logPImod_seasoncheck$residuals) +
+AICc(logmodlistPI[[31]])
+qplot(subdat$heatbing1902log500proj, logmodlistPI[[31]]$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdat$heatsubslopelog500, logPImod_seasoncheck$residuals) + 
+qplot(subdat$heatsubslopelog500, logmodlistPI[[31]]$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
 
 ggplot(pollutfieldclean_cast, aes(x=exp(predict(logmod34_nooutliersub, pollutfieldclean_cast, type='response')), 
                                   y=pollution_index)) +
   geom_point(alpha=1/2, size=2) + 
-  geom_point(data = subdatPI, aes(x = exp(predict(logPImod_seasoncheck, subdatPI))), color='red', alpha=1/2, size=2) + 
+  geom_point(data = subdatPI, aes(x = exp(predict(logmodlistPI[[31]], subdatPI))), color='red', alpha=1/2, size=2) + 
   geom_abline(intercept=0, slope=1) +
   theme_classic()
 
@@ -2152,8 +2163,8 @@ qplot(abs(exp(fitted(modlistlogPI[[34]]))-subdatPI[, pollution_index]),
   labs(x='Absolute error for model glm 34 - glm  nlcd_imp_ps_mean + AADTlog100thd + transitpow200_1thd ', 
        y='Absolute error for model 30 - nlcd_imp_ps_mean + AADTlog100thd + transitpow100_1')
 
-qplot(abs(fitted(modlistPI[[30]])-subdatPI[, pollution_index]), 
-      abs(exp(predict(logPImod_seasoncheck, subdatPI))-subdatPI[, pollution_index])) + 
+qplot(abs(fitted(modlistPI[[31]])-subdatPI[, pollution_index]), 
+      abs(exp(predict(logmodlistPI[[31]], subdatPI))-subdatPI[, pollution_index])) + 
   geom_abline(slope=1) + 
   labs(x='Absolute error for model 30', 
        y='Absolute error for model log 30')
@@ -2322,44 +2333,47 @@ qplot(subdatPI$heatsubspdllog500sqrt, mod34_nooutliersub$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
 
-mod30_nooutliers <- regdiagnostic_customtab(modlistPI[[30]], maxpar=vnum, 
+mod31_nooutliers <- regdiagnostic_customtab(modlistPI[[31]], maxpar=vnum, 
                                             remove_outliers = 'outliers',
                                             labelvec = pollutfieldclean_cast[, SiteIDPair],
                                             kCV = TRUE, k=10, cvreps=50)
-subdatPI <- pollutfieldclean_cast[!(paste0(SiteID, Pair) %in% 
-                                      strsplit(gsub('\\\\', '', mod30_nooutliers['outliers']), ',')$outliers),]
-mod30_nooutliersub <- lm(pollution_index ~ heatsubAADTlog100thd + heatbustransitpow100_1 + nlcd_imp_ps_mean, 
+subdatPI <- pollutfieldclean_cast[
+  !(paste0(SiteID, Pair) %in% 
+      strsplit(gsub('\\\\', '', mod31_nooutliers['outliers']), ',')$outliers),]
+mod31_nooutliersub <- lm(pollution_index ~ heatsubAADTlog100 + 
+                           heatbustransitpow100_1thd + nlcd_imp_ps_mean, 
                          data = subdatPI)
-ols_regress(mod30_nooutliersub)
-#ols_plot_diagnostics(mod30_nooutliersub)
-ols_coll_diag(mod30_nooutliersub)
-ols_correlations(mod30_nooutliersub)
-AICc(mod30_nooutliersub)
-qplot(subdatPI$heatbing1902log500proj, mod30_nooutliersub$residuals) +
+ols_regress(mod31_nooutliersub)
+#ols_plot_diagnostics(mod31_nooutliersub)
+ols_coll_diag(mod31_nooutliersub)
+ols_correlations(mod31_nooutliersub)
+AICc(mod31_nooutliersub)
+qplot(subdatPI$heatbing1902log500proj, mod31_nooutliersub$residuals) +
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
-qplot(subdatPI$heatsubspdllog500sqrt, mod30_nooutliersub$residuals) + 
+qplot(subdatPI$heatsubspdllog500sqrt, mod31_nooutliersub$residuals) + 
   geom_smooth(span=1) + geom_smooth(method='lm', color='red')
 
 
 ggplot(subdatPI, aes(x=predict(mod34_nooutliersub, subdatPI, type='response'), 
                      y=pollution_index)) +
   geom_point(alpha=1/2, size=2) + 
-  geom_point(aes(x = predict(mod30_nooutliersub, subdatPI)), color='red', alpha=1/2, size=2) + 
+  geom_point(aes(x = predict(mod31_nooutliersub, subdatPI)), color='red', alpha=1/2, size=2) + 
   geom_abline(intercept=0, slope=1) +
   theme_classic()
 
 #Compare with predictions without transformation
 qplot(abs(fitted(modlistglmPI[[34]])-subdatPI[, pollution_index]), 
-      abs(fitted(modlistPI[[30]])-subdatPI[, pollution_index])) + 
+      abs(fitted(modlistPI[[31]])-subdatPI[, pollution_index])) + 
   geom_abline(slope=1) + 
   labs(x='Absolute error for model glm 34 - glm  nlcd_imp_ps_mean + AADTlog100thd + transitpow200_1thd ', 
        y='Absolute error for model 30 - nlcd_imp_ps_mean + AADTlog100thd + transitpow100_1')
 
 #------ 10. Check spatial and temporal autocorrelation of residuals for full and robust datasets -------
 #Check for temporal effect
-AICc(mod30_nooutliersub)
-mod30_nooutliersub
-PImod_seasoncheck <- lm(pollution_index ~ heatsubAADTlog100thd + heatbustransitpow100_1 + 
+AICc(mod31_nooutliersub)
+mod31_nooutliersub
+PImod_seasoncheck <- lm(pollution_index ~ heatsubAADTlog100 + 
+                          heatbustransitpow100_1thd + 
                           nlcd_imp_ps_mean + season, 
                         data = subdatPI)
 summary(PImod_seasoncheck)
@@ -2374,7 +2388,7 @@ ignoring this may be more serious."
 #Other good resource: https://eburchfield.github.io/files/Spatial_regression_LAB.html
 
 par(mfrow=c(1,1))
-resnorm <- rstandard(PImod_seasoncheck) #Get standardized residuals from model
+resnorm <- rstandard(mod31_nooutliersub) #Get standardized residuals from model
 #Make bubble map of residuals
 bubbledat <- data.frame(resnorm, subdatPI$coords.x1, subdatPI$coords.x2)
 coordinates(bubbledat) <- c("subdatPI.coords.x1","subdatPI.coords.x2")
@@ -2400,49 +2414,52 @@ moran.plot(resnorm, weightmat_k[[2]], labels=subdatPI[,paste0(SiteID, Pair)], pc
 #Compute Moran's I
 "Should always only use lm.morantest for residuals from regression, see http://r-sig-geo.2731867.n2.nabble.com/Differences-between-moran-test-and-lm-morantest-td7591336.html
 for an explanation"
-lm.morantest(PImod_seasoncheck, listw = listw2U(weightmat_k[[1]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(PImod_seasoncheck, listw = listw2U(weightmat_k[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(PImod_seasoncheck, listw = listw2U(weightmat_k[[3]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(PImod_seasoncheck, listw = listw2U(weightmat_k[[4]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(PImod_seasoncheck, listw = listw2U(weightmat_k[[5]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
-lm.morantest(PImod_seasoncheck, listw = listw2U(weightmat_all)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod31_nooutliersub, listw = listw2U(weightmat_k[[1]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod31_nooutliersub, listw = listw2U(weightmat_k[[2]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod31_nooutliersub, listw = listw2U(weightmat_k[[3]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod31_nooutliersub, listw = listw2U(weightmat_k[[4]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod31_nooutliersub, listw = listw2U(weightmat_k[[5]])) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
+lm.morantest(mod31_nooutliersub, listw = listw2U(weightmat_all)) #lisw2U Make sure that distance matrix is symmetric (assumption in Moran's I)
 
 #Test for need for spatial regression model using Lagrange Multiplier (LM) tests
-lm.LMtests(PImod_seasoncheck, listw = listw2U(weightmat_k[[1]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))
-lm.LMtests(PImod_seasoncheck, listw = listw2U(weightmat_k[[2]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))
-lm.LMtests(PImod_seasoncheck, listw = listw2U(weightmat_k[[3]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))
-lm.LMtests(PImod_seasoncheck, listw = listw2U(weightmat_k[[4]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))                     
-lm.LMtests(PImod_seasoncheck, listw = listw2U(weightmat_k[[5]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))  
-lm.LMtests(PImod_seasoncheck, listw = listw2U(weightmat_all), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))
+lm.LMtests(mod31_nooutliersub, listw = listw2U(weightmat_k[[1]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))
+lm.LMtests(mod31_nooutliersub, listw = listw2U(weightmat_k[[2]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))
+lm.LMtests(mod31_nooutliersub, listw = listw2U(weightmat_k[[3]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))
+lm.LMtests(mod31_nooutliersub, listw = listw2U(weightmat_k[[4]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))                     
+lm.LMtests(mod31_nooutliersub, listw = listw2U(weightmat_k[[5]]), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))  
+lm.LMtests(mod31_nooutliersub, listw = listw2U(weightmat_all), test=c("LMerr","RLMerr", "RLMlag", "SARMA"))
 
 #Spatial simultaneous autoregressive error model estimation with 1 nearest neighbors
-sarlm_modPI <- errorsarlm(PImod_seasoncheck$call$formula, data = PImod_seasoncheck$model, 
+sarlm_modPI <- errorsarlm(mod31_nooutliersub$call$formula, data = mod31_nooutliersub$model, 
                           listw = listw2U(weightmat_k[[1]]))
 summary(sarlm_modPI)
 bptest.sarlm(sarlm_modPI)
-cor(PImod_seasoncheck$model$pollution_index, fitted(sarlm_modPI))^2
+cor(mod31_nooutliersub$model$pollution_index, fitted(sarlm_modPI))^2
 
 #Compare pseudo-R2 when predicting the trend
-cor(PImod_seasoncheck$model$pollution_index, predict(sarlm_modPI, pred.type='trend'))^2
-cor(PImod_seasoncheck$model$pollution_index, fitted(PImod_seasoncheck))^2
-cor(pollutfieldclean_cast$pollution_index , with(pollutfieldclean_cast, sarlm_modPI$coefficients['(Intercept)'] + 
-                                                   sarlm_modPI$coefficients['heatsubAADTlog100thd']*heatsubAADTlog100thd  + 
-                                                   sarlm_modPI$coefficients['heatbustransitpow100_1']*heatbustransitpow100_1  + 
-                                                   sarlm_modPI$coefficients['nlcd_imp_ps_mean']*nlcd_imp_ps_mean))^2
+cor(mod31_nooutliersub$model$pollution_index, predict(sarlm_modPI, pred.type='trend'))^2
+cor(mod31_nooutliersub$model$pollution_index, fitted(mod31_nooutliersub))^2
+cor(pollutfieldclean_cast$pollution_index , 
+    with(pollutfieldclean_cast, sarlm_modPI$coefficients['(Intercept)'] + 
+           sarlm_modPI$coefficients['heatsubAADTlog100']*heatsubAADTlog100  + 
+           sarlm_modPI$coefficients['heatbustransitpow100_1thd']*heatbustransitpow100_1thd  + 
+           sarlm_modPI$coefficients['nlcd_imp_ps_mean']*nlcd_imp_ps_mean))^2
 #Compare MAPE
-DescTools::MAPE(PImod_seasoncheck$model$pollution_index, fitted(sarlm_modPI))
-DescTools::MAPE(PImod_seasoncheck$model$pollution_index, fitted(PImod_seasoncheck))
+DescTools::MAPE(mod31_nooutliersub$model$pollution_index, fitted(sarlm_modPI))
+DescTools::MAPE(mod31_nooutliersub$model$pollution_index, fitted(mod31_nooutliersub))
 
 #Compare MAPE with all 
-DescTools::MAPE(pollutfieldclean_cast$pollution_index ,with(pollutfieldclean_cast, sarlm_modPI$coefficients['(Intercept)'] + 
-                                                              sarlm_modPI$coefficients['heatsubAADTlog100thd']*heatsubAADTlog100thd  + 
-                                                              sarlm_modPI$coefficients['heatbustransitpow100_1']*heatbustransitpow100_1  + 
-                                                              sarlm_modPI$coefficients['nlcd_imp_ps_mean']*nlcd_imp_ps_mean))
-DescTools::MAPE(pollutfieldclean_cast$pollution_index, predict(PImod_seasoncheck, pollutfieldclean_cast))
+DescTools::MAPE(pollutfieldclean_cast$pollution_index ,
+                with(pollutfieldclean_cast, sarlm_modPI$coefficients['(Intercept)'] + 
+                       sarlm_modPI$coefficients['heatsubAADTlog100']*heatsubAADTlog100  + 
+                       sarlm_modPI$coefficients['heatbustransitpow100_1thd']*heatbustransitpow100_1thd  + 
+                       sarlm_modPI$coefficients['nlcd_imp_ps_mean']*nlcd_imp_ps_mean))
+DescTools::MAPE(pollutfieldclean_cast$pollution_index, predict(mod31_nooutliersub, pollutfieldclean_cast))
 
 #Compare observed~predicted for full-no outlier model and for aspatial and spatial model
 spatial_comparisonplot <- ggplot(subdatPI, aes(x=fitted(sarlm_modPI), y=pollution_index)) + 
-  geom_point(aes(x=fitted(PImod_seasoncheck)), size=2, alpha=1/2, color='orange') +
+  geom_point(aes(x=fitted(mod31_nooutliersub)), size=2, alpha=1/2, color='orange') +
+  geom_point(aes(x=fitted(sarlm_modPI)), size=2, alpha=1/2, color='green') +
   geom_point(size=2, alpha=1/2, color='red') + 
   geom_abline(size=1, slope=1, intercept=0, color='red') + 
   #geom_text(aes(label=paste0(SiteID, Pair))) +
@@ -2501,16 +2518,12 @@ subdat[, sum(abs(rank(pollution_index_mod48pred)-rank(pollution_index)))/(.N^2)]
 # 6. Export models and data for subsequent analysis, make tables and figures for manuscript
 ############################################################################################################################################
 #--------------- A. Export models ----
-exportlist <- list(logZnstandmod = sarlm_modlogZnstand, Custandmod = sarlm_modCustand, PImod = sarlm_modPI) 
+exportlist <- list(logZnstandmod = sarlm_modlogZnstand, 
+                   Custandmod = sarlm_modCustand,
+                   PImod = sarlm_modPI) 
 
 #logCustandmod = modlistlogCustand[[23]])
 saveRDS(exportlist, file = file.path(moddir, 'fieldXRFmodels.rds'))
-
-#Export scaling variable for all pollution drivers
-pollutmaxscale <- dcast(pollutfieldclean[!is.na(mean)], 
-                        formula = castformula,
-                        value.var= 'mean')[, lapply(.SD, max), .SDcols = heatcols]
-saveRDS(pollutmaxscale, file = file.path(moddir, 'fieldXRFmodels_scaling.rds'))
 
 #--------------- B. Export data for Luwam ----
 write.csv(pollutfieldclean_cast, 
@@ -2564,8 +2577,8 @@ pollutfieldclean_cast[, `:=`(
     sarlm_modCustand$coefficients['heatbustransitlog200sqrt']*heatbustransitlog200sqrt + 
     sarlm_modCustand$coefficients['nlcd_imp_ps_mean']*nlcd_imp_ps_mean,
   predPI_sarlm = sarlm_modPI$coefficients['(Intercept)'] + 
-    sarlm_modPI$coefficients['heatsubAADTlog100thd']*heatsubAADTlog100thd  + 
-    sarlm_modPI$coefficients['heatbustransitpow100_1']*heatbustransitpow100_1  + 
+    sarlm_modPI$coefficients['heatsubAADTlog100']*heatsubAADTlog100  + 
+    sarlm_modPI$coefficients['heatbustransitpow100_1thd']*heatbustransitpow100_1thd  + 
     sarlm_modPI$coefficients['nlcd_imp_ps_mean']*nlcd_imp_ps_mean
 )]
 

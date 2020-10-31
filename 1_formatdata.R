@@ -1652,10 +1652,12 @@ extraoutliers <- c('51A') #Remove anomalous data points by 15th Ave NE and Luwam
 
 #---- A. Field XRF - all elements against each other ----
 castformula <- as.formula(paste0(
-  paste0(colnames(pollutfieldclean)[!(colnames(pollutfieldclean) %in%
-                                        c('Elem', 'name', 'mean','range', 'sd', 'cv', 'transmean',
-                                          'pollutfield_flags', 'pollutfieldR2', 'pollutpred'))],
-         collapse='+'),
+  paste0(colnames(pollutfieldclean)[
+    !(colnames(pollutfieldclean) %in%
+        c('Elem', 'name', 'mean','range', 'sd',
+          'cv', 'transmean', 'tukeylambda',
+          'pollutfield_flags', 'pollutfieldR2', 'pollutpred'))],
+    collapse='+'),
   '~Elem'))
 pollutfieldclean_cast <- dcast(pollutfieldclean[!is.na(mean)], 
                                formula = castformula,
@@ -1746,14 +1748,29 @@ selcols_trans <- data.trans(as.data.frame(pollutfieldclean_cast[, elemcols[elemc
                             method='power',exp=1/3, plot=F)
 cbcols <- paste0(elemcols[elemcols %in% selcols], 'cubrt')
 pollutfieldclean_cast[, (cbcols) := selcols_trans]
+
+#Check which site is the minimum for each element
+pollutfieldclean_cast[, .SD[which.min(Cu), SiteIDPair]]
+pollutfieldclean_cast[, .SD[which.min(Pb), SiteIDPair]]
+pollutfieldclean_cast[, .SD[which.min(Zn), SiteIDPair]]
+
 #standardize by max value (use of transformed index actually leads to heteroscedacity)
-pollutfieldclean_cast[, cbpollution_index := 100*Reduce('+', lapply(.SD, function(x) (x/max(x))))/length(cbcols), 
-                      .SDcols = cbcols][
-                        ,`:=`(pollution_index = 100*Reduce('+', lapply(.SD, function(x) (x/max(x))))/length(cbcols),
-                              Znstand = 100*Zn/max(Zn),
-                              Custand = 100*Cu/max(Cu),
-                              Pbstand = 100*Pb/max(Pb)),
-                        .SDcols = elemcols[elemcols %in% selcols]]
+pollutfieldclean_cast[
+  , cbpollution_index := 100*Reduce('+', lapply(.SD, function(x)
+    (x/max(x))))/length(cbcols), 
+  .SDcols = cbcols][
+    ,`:=`(
+      pollution_index = round(
+        Reduce('*', lapply(.SD, function(x) 
+          (x/x[pollutfieldclean_cast[, which.min(Zn)]])))^(1/3),
+        2),
+      pollution_index_old = 100*
+        Reduce('+', lapply(.SD, function(x)
+          (x/max(x))))/length(cbcols),
+      Znstand = 100*Zn/max(Zn),
+      Custand = 100*Cu/max(Cu),
+      Pbstand = 100*Pb/max(Pb)),
+    .SDcols = elemcols[elemcols %in% selcols]]
 
 #---- C. All pollution drivers against each other ----
 #Define columns to analyze
@@ -1933,6 +1950,13 @@ dev.off()
 write.fst(pollutfieldclean_cast, 
           file.path(resdir, 
                     paste0('pollutfieldclean_cast', Sys.Date(), '.fst')))
+
+#Export scaling variable for all pollution drivers
+pollutmaxscale <- dcast(pollutfieldclean[!is.na(mean)], 
+                        formula = castformula,
+                        value.var= 'mean')[, lapply(.SD, max), .SDcols = heatcols]
+
+saveRDS(pollutmaxscale, file = file.path(moddir, 'fieldXRFmodels_scaling.rds'))
 ##############################################################################
 
 
@@ -2687,3 +2711,4 @@ png(file.path(moddir,
 (pPb_1 | pPb_2) /
 (pZn_1 | pZn_2)
 dev.off()
+
