@@ -13,7 +13,7 @@ compute_elemcv <- function(dt, bycol=NULL)  {
   return(outdf)
 }
 
-# 1. Import data 
+# 1. Import data ------------------------------------
 ############################################################################################################################################
 ########### ---- A. Import and format field data ---- ####
 fieldata <- read.csv(file.path(datadir,"field_data/field_data_raw_20190430_edit.csv"))
@@ -96,10 +96,11 @@ ggplot(keVmaxnet, aes(x=meannet, y=signalratio)) +
   scale_y_log10() +
   scale_x_log10() +
   geom_smooth(span=1) +
-  theme_bw()
+  theme_bw() + 
+  theme(text=element_text(size=14))
 
 png(file.path(inspectdir, 'signalratio_energy.png'), 
-    height = 10 , width = 8, units = 'in', res=300)
+    height = 10 , width = 8, units = 'in', res=600)
 signalenergy_p <- ggplot(keVmaxnet[!(Element %in% c('Pd', 'Rh')) & type == 'In situ XRF',],
        aes(x=Energy.keV, y=signalratio)) +
   geom_smooth(span=1, method='gam', formula = y ~ s(x, bs = "cs", k=4), alpha = 1/4) + 
@@ -107,7 +108,8 @@ signalenergy_p <- ggplot(keVmaxnet[!(Element %in% c('Pd', 'Rh')) & type == 'In s
   #labs(title ='In situ pXRF') + 
   scale_y_log10(name='In situ XRF - Net/Background photon count') +
   scale_x_continuous(limits= c(0,33.5), expand=c(0,0))  +
-  theme_bw()
+  theme_bw()+ 
+  theme(text=element_text(size=14))
 
 labfield_signal_p <- ggplot(dcast(keVmaxnet[!(Element %in% c('Pd', 'Rh')),],
              element_line~type, value.var = 'signalratio'),
@@ -116,8 +118,10 @@ labfield_signal_p <- ggplot(dcast(keVmaxnet[!(Element %in% c('Pd', 'Rh')),],
   scale_x_log10(name='Laboratory XRF - Net/Background photon count') + 
   scale_y_log10(name='In situ XRF - Net/Background photon count') + 
   geom_abline() +
-  theme_bw()
-grid.arrange(signalenergy_p, labfield_signal_p)
+  theme_bw()+ 
+  theme(text=element_text(size=14))
+patchwork <- signalenergy_p/labfield_signal_p
+patchwork + plot_annotation(tag_levels = 'A')
 dev.off()
 
 ########### ---- F. Import ICP-OES data ---- ####
@@ -155,7 +159,7 @@ tire_elem <- c('Al', 'Ba', 'Ca', 'Cd', 'Co', 'Cr', 'Cu', 'Fe', 'K', 'Mg', 'Mn', 
 ############################################################################################################################################
 
 
-# 2. Format XRF and ICP data
+# 2. Format XRF and ICP data -------------------------------
 ############################################################################################################################################
 ########### ---- A. Format XRF data ---- ####
 # ---- 1. Cast while summing net photon counts across electron transitions ----
@@ -183,15 +187,16 @@ elemcols <- which(colnames(labdt) %in% periodicTable$symb)
 lab_artaxstats <- labdt[, sapply(.SD, function(x) list(mean=mean(x, na.rm=T),
                                                        sd=sd(x, na.rm=T),
                                                        range=max(x,na.rm=TRUE)-min(x,na.rm=TRUE))), 
-                        by=c('SiteID','Pair'), .SDcols = elemcols]
-setnames(lab_artaxstats, c('SiteID', 'Pair', 
+                        by=c('SiteID','Pair','Dry.start'), .SDcols = elemcols]
+setnames(lab_artaxstats, c('SiteID', 'Pair','Dry.start', 
                            paste(rep(colnames(labdt)[elemcols],each=3),
                                  c('mean', 'sd', 'range'), sep='_')))
 
-labXRF_format <- melt(lab_artaxstats, id.vars=c('SiteID','Pair'), variable.name='Elem_stats') %>%
+labXRF_format <- melt(lab_artaxstats, id.vars=c('SiteID','Pair','Dry.start'),
+                      variable.name='Elem_stats') %>%
   .[, `:=`(Elem = sub('(.*)[_](.*)', '\\1', Elem_stats),
            stats = sub('(.*)[_](.*)', '\\2', Elem_stats))] %>% #Replaces the whole match with the first group in the regex pattern
-  dcast(SiteID+Pair+Elem~stats, value.var = 'value') %>%
+  dcast(SiteID+Pair+Dry.start+Elem~stats, value.var = 'value') %>%
   .[, cv := sd/mean] %>%
   merge(periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
@@ -200,15 +205,17 @@ elemcols <- which(colnames(fieldt) %in% periodicTable$symb)
 field_artaxstats <- fieldt[, sapply(.SD, function(x) list(mean=mean(x, na.rm=T),
                                                           sd=sd(x, na.rm=T),
                                                           range=max(x,na.rm=TRUE)-min(x,na.rm=TRUE))), 
-                           by=c('SiteID','Pair'), .SDcols = elemcols]
-setnames(field_artaxstats, c('SiteID', 'Pair', 
+                           by=c('SiteID','Pair','season', 'Date'), .SDcols = elemcols]
+setnames(field_artaxstats, c('SiteID', 'Pair', 'season', 'Date', 
                              paste(rep(colnames(fieldt)[elemcols],each=3),
                                    c('mean', 'sd', 'range'), sep='_')))
 
-fieldXRF_format <- melt(field_artaxstats, id.vars=c('SiteID','Pair'), variable.name='Elem_stats') %>%
+fieldXRF_format <- melt(field_artaxstats,
+                        id.vars=c('SiteID','Pair', 'season', 'Date'), 
+                        variable.name='Elem_stats') %>%
   .[, `:=`(Elem = sub('(.*)[_](.*)', '\\1', Elem_stats),
            stats = sub('(.*)[_](.*)', '\\2', Elem_stats))] %>% #Replaces the whole match with the first group in the regex pattern
-  dcast(SiteID+Pair+Elem~stats, value.var = 'value') %>%
+  dcast(SiteID+Pair+season+Elem+Date~stats, value.var = 'value') %>%
   .[, cv := sd/mean] %>%
   merge(periodicTable[,c('symb','name')], by.x='Elem', by.y='symb')
 
@@ -221,11 +228,14 @@ lab_artaxmean <- lab_artaxstats[, .SD, .SDcols = c(1,2, grep('mean', colnames(la
 colnames(lab_artaxmean) <- gsub('_mean', '', colnames(lab_artaxmean))
 
 # ---- 7. Check field XRF data distribution by element then transform and standardize ----
+transcols <- c('transmean', 'tukeylambda')
+
 #Use Tukey ladder computation to determine each variable's transformation (only on numeric columns with more than 1 unique observation)
 fieldXRF_format[Elem %in% fieldXRF_format[, length(unique(mean))>1, by=Elem][V1==T, Elem],
-                transmean := transformTukey_lambda(mean, start = -2.5, end = 2.5,int = 0.025, 
+                (transcols):= transformTukey_lambda(mean, start = -2.5, end = 2.5,int = 0.025, 
                                                    rastertab=F,rep=100, verbose = FALSE, 
-                                                   statistic = 1)[[1]], by=Elem]
+                                                   statistic = 1), by=Elem]
+
 #Run a shapiro test on each element
 field_transmean <- dcast(fieldXRF_format, SiteID+Pair~Elem, value.var = 'transmean') 
 normtest <- shapiro_test_df(field_transmean[,sapply(field_transmean, class)=='numeric' &
@@ -248,9 +258,9 @@ fieldXRF_format[, transmean:=scale(transmean), by=Elem]
 # ---- 8. Check lab XRF data distribution by element then transform and standardize ----
 #Use Tukey ladder computation to determine each variable's transformation (only on numeric columns with more than 1 unique observation)
 labXRF_format[Elem %in% labXRF_format[, length(unique(mean))>1, by=Elem][V1==T, Elem],
-              transmean := transformTukey_lambda(mean, start = -2, end = 2,int = 0.025, 
+              (transcols) := transformTukey_lambda(mean, start = -2, end = 2,int = 0.025, 
                                                  rastertab=F,rep=100, verbose = FALSE, 
-                                                 statistic = 1)[[1]], by=Elem]
+                                                 statistic = 1), by=Elem]
 
 #Run a shapiro test on each element
 lab_transmean <- dcast(labXRF_format, SiteID+Pair~Elem, value.var = 'transmean') 
@@ -312,11 +322,12 @@ ICPmelt[, `:=`(SiteID = gsub('[A-Z]', '', SAMPLE.SET),
                Pair = gsub('[0-9]', '', SAMPLE.SET))]
 
 # ---- 3. Check ICP data distribution by element then transform and standardize ----
+transcolsicp <- c('transICP', 'tukeylambda')
 #Use Tukey ladder computation to determine each variable's transformation (only on numeric columns with more than 1 unique observation)
 ICPmelt[Elem %in% ICPmelt[, length(unique(ICP))>1, by=Elem][V1==T, Elem],
-        transICP := transformTukey_lambda(ICP, start = -2, end = 2,int = 0.025, 
-                                          rastertab=F,rep=100, verbose = FALSE, 
-                                          statistic = 1)[[1]], by=Elem]
+        (transcolsicp) := transformTukey_lambda(ICP, start = -2, end = 2,int = 0.025, 
+                                                rastertab=F,rep=100, verbose = FALSE, 
+                                                statistic = 1)[[1]], by=Elem]
 
 #Run a shapiro test on each element
 ICP_trans <- dcast(ICPmelt, SiteID+Pair~Elem, value.var = 'transICP') 
@@ -384,8 +395,8 @@ joincols <- c('SiteID', 'Pair', 'Elem')
 labfieldmerge <- labXRF_format[fieldXRF_format, on = joincols] %>%
   .[SiteID != 1 & Elem != 'Rh',]
 setnames(labfieldmerge, 
-         colnames(labfieldmerge[,-joincols, with=F]),
-         gsub('^(?!i)', 'lab_', colnames(labfieldmerge[,-joincols, with=F]), perl=T))
+         colnames(labXRF_format[,-joincols, with=F]),
+         gsub('^(?!i)', 'lab_', colnames(labXRF_format[,-joincols, with=F]), perl=T))
 setnames(labfieldmerge, 
          colnames(labfieldmerge[,-joincols, with=F]),
          gsub('^i[.]', 'field_', colnames(labfieldmerge[,-joincols, with=F]), perl=T))
@@ -412,7 +423,7 @@ trees_ICP_trans <- trees_trans[ICP_trans, on=c('SiteID', 'Pair')][
 ############################################################################################################################################
 
 
-# 3. Inspect data and remove outliers
+# 3. Inspect data and remove outliers ------------------
 ######################  ---- A. Field XRF ---- ###########
 str(fieldXRF_format)
 # ---- 1. Assess within-tree field variability ----
@@ -488,6 +499,7 @@ treecv_disp <- ggplot(fieldXRF_formatsite[!(fieldXRF_formatsite$Elem %in% c('Rh'
   facet_wrap(~Elem, nrow = 6, ncol = 5) + 
   theme_bw() + 
   theme(strip.background = element_rect(color = 'white', fill = 'lightgrey'),
+        text = element_text(size=14),
         strip.text = element_text(size=10),
         panel.border = element_blank(),
         axis.text.x = element_text(angle=90),
@@ -503,7 +515,8 @@ treesite_cvp <- ggplot(treesitecv_compare,
                   box.padding = 0, label.padding = 0, point.padding=0) +
   scale_x_log10(name='Tree - Mean % CV') + 
   scale_y_log10(name='Site - Mean % CV') + 
-  theme_bw()
+  theme_bw() + 
+  theme(text = element_text(size=14))
 
 grid.arrange(treecv_disp, treesite_cvp, layout_matrix = rbind(c(1), c(1), c(2)))
 dev.off()
@@ -1630,64 +1643,10 @@ pollutlabclean <- pollutlabmerge[!(paste0(SiteID, Pair) %in% c('53A', '49A')),]
 pollutICPclean <-  pollutICPmerge[!(paste0(SiteID, Pair) %in% c('49A')),]
 
 
-###################### ---- E. Make summary table of variability ----------------
-#Find sites that are available for all three methods
-commonsites <- intersect(
-  intersect(ICPmean[,unique(paste0(SiteID, Pair))], 
-            fieldXRF_format[,unique(paste0(SiteID, Pair))]
-            ),
-  labXRF_format[,unique(paste0(SiteID, Pair))]
-)
-
-commonduplisites <- intersect(
-  intersect(ICPmean[duplicated(SiteID), unique(SiteID)], 
-            fieldXRF_format[duplicated(SiteID), unique(SiteID)]
-  ),
-  labXRF_format[duplicated(SiteID), unique(SiteID)]
-)
-
-
-treefielddt <- fieldXRF_format[(!(Elem %in% c('Rh','Pd','Ar'))) & 
-                                 (paste0(SiteID, Pair) %in% commonsites), 
-                               list(treeCV_field = round(100*mean(cv, na.rm=T))), by=Elem] %>%
-  setkey(Elem)
-sitefielddt <- fieldXRF_format[(!(Elem %in% c('Rh','Pd','Ar'))) & 
-                  (SiteID %in% commonduplisites),
-                list(cvsite = sd(mean)/mean(mean)), by=.(SiteID, Elem)] %>%
-  .[, list(siteCV_field = round(100*mean(cvsite))), by=.(Elem)] %>%
-  setkey(Elem)
-
-pelletlabdt <- labXRF_format[!(Elem %in% c('Rh','Pd','Ar')) & 
-                (paste0(SiteID, Pair) %in% commonsites), 
-              list(pelletCV_lab = round(100*mean(cv, na.rm=T))), by=Elem] %>%
-  setkey(Elem)
-sitelabdt <-labXRF_format[(!(Elem %in% c('Rh','Pd','Ar'))) & 
-                  (SiteID %in% commonduplisites),
-                list(cvsite = sd(mean)/mean(mean)), by=.(SiteID, Elem)] %>%
-  .[, list(siteCV_lab = round(100*mean(cvsite))), by=.(Elem)] %>%
-  setkey(Elem)
-
-siteicpdt <- melt(ICPmean, id.vars = c('SAMPLE.SET', 'SiteID', 'Pair'),
-                  variable.name = 'Elem')[
-  (!(Elem %in% c('Rh','Pd'))) & 
-    (SiteID %in% commonduplisites),
-  list(cvsite = sd(value)/mean(value)), by=.(SiteID, Elem)] %>%
-  .[, list(siteCV_ICP = round(100*mean(cvsite))), by=.(Elem)] %>%
-  setkey(Elem)
-
-cvsummary_dt <- merge(treefielddt, pelletlabdt, all.x=T, all.y=T) %>%
-  merge(ICPCV, all.x=T, all.y=T) %>%
-  merge(sitefielddt, all.x=T, all.y=T) %>%
-  merge(sitelabdt, all.x=T, all.y=T) %>%
-  merge(siteicpdt, all.x=T, all.y=T) %>%
-  .[!(Elem %in% c('Ag')),] %>%
-  setorder(Elem)
-
-
 ############################################################################################################################################
 
 
-# 4. Check relationship among and reduce variables 
+# 4. Check relationship among and reduce variables  -----------------
 ############################################################################################################################################
 extraoutliers <- c('51A') #Remove anomalous data points by 15th Ave NE and Luwam's (latter do not appear to be precise enough
 
@@ -1974,4 +1933,757 @@ dev.off()
 write.fst(pollutfieldclean_cast, 
           file.path(resdir, 
                     paste0('pollutfieldclean_cast', Sys.Date(), '.fst')))
+##############################################################################
 
+
+# 5. Validate field XRF and lab XRF against ICP-OES -------------------
+###################### ---- E. Make summary table of variability ----------------
+#Find sites that are available for all three methods
+commonsites <- intersect(
+  intersect(ICPmean[,unique(paste0(SiteID, Pair))], 
+            fieldXRF_format[,unique(paste0(SiteID, Pair))]
+            ),
+  labXRF_format[,unique(paste0(SiteID, Pair))]
+)
+
+commonduplisites <- intersect(
+  intersect(ICPmean[duplicated(SiteID), unique(SiteID)], 
+            fieldXRF_format[duplicated(SiteID), unique(SiteID)]
+  ),
+  labXRF_format[duplicated(SiteID), unique(SiteID)]
+)
+
+
+treefielddt <- fieldXRF_format[(!(Elem %in% c('Rh','Pd','Ar'))) & 
+                                 (paste0(SiteID, Pair) %in% commonsites), 
+                               list(treeCV_field = round(100*mean(cv, na.rm=T))), by=Elem] %>%
+  setkey(Elem)
+sitefielddt <- fieldXRF_format[(!(Elem %in% c('Rh','Pd','Ar'))) & 
+                  (SiteID %in% commonduplisites),
+                list(cvsite = sd(mean, na.rm=T)/mean(mean, na.rm=T)), by=.(SiteID, Elem)] %>%
+  .[, list(siteCV_field = round(100*mean(cvsite, na.rm=T))), by=.(Elem)] %>%
+  setkey(Elem)
+
+pelletlabdt <- labXRF_format[!(Elem %in% c('Rh','Pd','Ar')) & 
+                (paste0(SiteID, Pair) %in% commonsites), 
+              list(pelletCV_lab = round(100*mean(cv, na.rm=T))), by=Elem] %>%
+  setkey(Elem)
+sitelabdt <-labXRF_format[(!(Elem %in% c('Rh','Pd','Ar'))) & 
+                  (SiteID %in% commonduplisites),
+                list(cvsite = sd(mean, na.rm=T)/mean(mean, na.rm=T)), by=.(SiteID, Elem)] %>%
+  .[, list(siteCV_lab = round(100*mean(cvsite, na.rm=T))), by=.(Elem)] %>%
+  setkey(Elem)
+
+siteicpdt <- melt(ICPmean, id.vars = c('SAMPLE.SET', 'SiteID', 'Pair'),
+                  variable.name = 'Elem')[
+  (!(Elem %in% c('Rh','Pd'))) & 
+    (SiteID %in% commonduplisites),
+  list(cvsite = sd(value, na.rm=T)/mean(value, na.rm=T))
+  , by=.(SiteID, Elem)] %>%
+  .[, list(siteCV_ICP = round(100*mean(cvsite, na.rm=T))
+           ), by=.(Elem)] %>%
+  setkey(Elem)
+
+
+icpfracstat <- melt(ICPmean, id.vars = c('SAMPLE.SET', 'SiteID', 'Pair'),
+    variable.name = 'Elem')[
+      (!(Elem %in% c('Rh','Pd'))) & 
+        (paste0(SiteID, Pair) %in% commonsites),
+      list(
+        icpstat = paste0(round(mean(value, na.rm=T)), ' (', 
+                       round(min(value, na.rm=T)),'-',
+                       round(max(value, na.rm=T)), ')')
+        ), by=Elem]
+      
+
+cvsummary_dt <- merge(treefielddt, pelletlabdt, all.x=T, all.y=T) %>%
+  merge(ICPCV, all.x=T, all.y=T) %>%
+  merge(sitefielddt, all.x=T, all.y=T) %>%
+  merge(sitelabdt, all.x=T, all.y=T) %>%
+  merge(siteicpdt, all.x=T, all.y=T) %>%
+  merge(icpfracstat, all.x=T, all.y=T) %>%
+  .[!(Elem %in% c('Ag')),] %>%
+  setorder(Elem)
+
+kable(cvsummary_dt, 
+      format = "html", escape = F) %>%
+  kable_styling("striped", full_width = T) %>%
+  save_kable(file.path(resdir, 'CVsummary_20201028.doc'), self_contained=T)
+
+
+###################### ---- F. Check relationship between methods ---------------
+plot_elemvalid <- function(dt, elem, x, y, color, method='gam', outliers=NULL) {
+  if (!is.null(outliers)) {
+    dtout <- dt[(SiteIDPair %in% outliers),]
+    dt <- dt[!(SiteIDPair %in% outliers),]
+  }
+  
+  p <- ggplot(dt[Elem==elem,], aes_string(x=x, y=y)) + 
+    geom_smooth(method=method, color='black') +
+    geom_point(color=color, size=3, alpha=1/2) +
+    scale_color_distiller(palette="Spectral") + 
+    theme_classic()
+  
+  if (!is.null(outliers)) {
+    p <- p + 
+      geom_point(data=dtout[Elem==elem,], color='black', size=3, alpha=1/2)
+  }
+  return(p)
+}
+
+# ---- Relationships between field XRF and lab XRF ---- 
+labfieldsub <- labfieldmerge[!(Elem %in% c(excol, excol2)) & !is.na(lab_mean),] %>%
+  .[, drydelay := as.numeric(
+    difftime(as.Date(substr(lab_Dry.start, 1, 10), format="%m/%d/%Y"),
+             Date)
+    )] %>%
+  .[, SiteIDPair := paste0(SiteID, Pair)] %>%
+  .[, `:=`(loglab = log10(lab_mean),
+           logfield = log10(field_mean))]
+
+
+qplot(labfieldsub$drydelay)
+
+#Get correlation with outliers
+labfieldsub[, list(r_all=cor(x=field_mean, y=lab_mean)), by=Elem]
+labfieldsub[, list(r_all=cor(x=field_transmean, y=lab_transmean)), by=Elem]
+
+# labfieldsub<- labfieldsub[, list(lab_mean=mean(lab_mean), field_mean=mean(field_mean)), 
+#                           by=.(SiteID, Elem)]
+# plot_elemvalid(dt=labfieldsub, elem='Cu', x='field_mean', y='lab_mean',
+#                color='#238b45') +
+#   geom_text(aes(label=SiteID))
+
+# -------- Cu -------------
+#Check relationship
+plot_elemvalid(dt=labfieldsub, elem='Cu', x='field_mean', y='lab_mean',
+               color='#238b45') +
+  geom_text(aes(label=SiteIDPair))
+
+
+labfieldmodCu_prelim <- glm(lab_mean~field_mean,
+                   data = labfieldsub[Elem=='Cu',],
+                   family=Gamma('log'))
+GAMrescheck(labfieldmodCu_prelim)
+Cuprelimdiag <- regdiagnostic_customtab(mod=labfieldmodCu_prelim,kCV = TRUE, 
+                                        k=10, cvreps=50,
+                                        labelvec = labfieldsub[Elem=='Cu', SiteIDPair],
+                                        remove_outliers = 'outliers')
+Cuoutliers_fieldlab <- strsplit(gsub('\\\\', '', Cuprelimdiag['outliers']), ',')$outliers
+
+#Check relationship again
+plot_elemvalid(dt=labfieldsub, outliers=Cuoutliers_fieldlab, 
+               elem='Cu', x='field_mean', y='lab_mean',
+               color='#238b45', method='lm') +
+  scale_x_log10() + 
+  scale_y_log10()
+
+#GLM
+labfieldmodCu <- list()
+labfieldmodCu[[1]] <- glm(lab_mean~field_mean,
+                          data = labfieldsub[Elem=='Cu',], 
+                          family = gaussian('log'))
+GAMrescheck(labfieldmodCu[[1]])
+
+labfieldmodCu[[1]] <- glm(lab_mean~field_mean,
+                  data = labfieldsub[Elem=='Cu',], 
+                  family = Gamma('log'))
+GAMrescheck(labfieldmodCu[[1]])
+
+labfieldmodCu[[2]] <- glm(lab_mean~field_mean + drydelay,
+                  data = labfieldsub[Elem=='Cu',], 
+                  family = Gamma('log'))
+GAMrescheck(labfieldmodCu[[2]])
+
+labfieldmodCu[[3]] <- glm(lab_mean~logfield,
+                          data = labfieldsub[Elem=='Cu',], 
+                          family = Gamma('log'))
+GAMrescheck(labfieldmodCu[[3]])
+
+
+labfieldmodCu[[4]] <- glm(lab_mean~field_mean,
+                          data = labfieldsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_fieldlab),], 
+                          family = Gamma('log'))
+GAMrescheck(labfieldmodCu[[4]])
+
+labfieldmodCu[[5]] <- glm(lab_mean~logfield,
+                          data = labfieldsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_fieldlab),], 
+                          family = Gamma('log'))
+GAMrescheck(labfieldmodCu[[5]])
+
+
+labfieldmodCu[[3]] <- mgcv::gam(lab_mean~s(field_mean, k=4),
+                        data = labfieldsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_fieldlab),], 
+                        family = gaussian('log'))
+GAMrescheck(labfieldmodCu[[3]])
+GAMmultiplot(labfieldmodCu[[3]])
+
+# -------- Pb -------------
+#Check relationship
+plot_elemvalid(dt=labfieldsub, elem='Pb', x='field_mean', y='lab_mean',
+               color='#238b45', method='lm') + 
+  scale_x_log10() + 
+  geom_text(aes(label=SiteIDPair)) +
+  scale_y_log10()
+
+labfieldmodPb_prelim <-  glm(lab_mean~logfield,
+                             data = labfieldsub[Elem=='Pb',], 
+                             family = Gamma('log'))
+
+Pbprelimdiag <- regdiagnostic_customtab(mod=labfieldmodPb_prelim,
+                                        kCV = TRUE, 
+                                        k=10, cvreps=50,
+                                        labelvec = labfieldsub[Elem=='Pb', SiteIDPair],
+                                        remove_outliers = 'outliers & leverage')
+Pboutliers_fieldlab <- strsplit(gsub('\\\\', '', Pbprelimdiag['outliers']), ',')$outliers
+
+#Check relationship again
+plot_elemvalid(dt=labfieldsub, outliers=Pboutliers_fieldlab, 
+               elem='Pb', x='field_mean', y='lab_mean',
+               color='#238b45', method='lm') +
+  scale_x_log10() + 
+  scale_y_log10()
+
+#GLM
+labfieldmodPb <- list()
+labfieldmodPb[[1]] <- glm(lab_mean~field_mean,
+                  data = labfieldsub[Elem=='Pb',], 
+                  family = Gamma('log'))
+GAMrescheck(labfieldmodPb[[1]])
+
+labfieldmodPb[[2]] <- glm(lab_mean~field_mean,
+                  data = labfieldsub[Elem=='Pb' & !(SiteIDPair %in% Pboutliers_fieldlab),], 
+                  family = Gamma('log'))
+GAMrescheck(labfieldmodPb[[2]])
+
+labfieldmodPb[[3]] <- glm(lab_mean~logfield,
+                  data = labfieldsub[Elem=='Pb',], 
+                  family = Gamma('log'))
+GAMrescheck(labfieldmodPb[[3]])
+
+labfieldmodPb[[4]] <- glm(lab_mean~logfield,
+                          data = labfieldsub[Elem=='Pb' & !(SiteIDPair %in% Pboutliers_fieldlab),], 
+                          family = Gamma('log'))
+GAMrescheck(labfieldmodPb[[4]])
+
+labfieldmodPb[[5]] <- mgcv::gam(lab_mean~s(field_mean, k=3),
+                        data = labfieldsub[Elem=='Pb' & !(SiteIDPair %in% Pboutliers_fieldlab),], 
+                        family = gaussian('log'))
+GAMrescheck(labfieldmodPb[[5]])
+GAMmultiplot(labfieldmodPb[[5]])
+
+
+# -------- Zn -------------
+#Check relationship
+plot_elemvalid(dt=labfieldsub, elem='Zn', x='field_mean', y='lab_mean',
+               color='#238b45')
+
+labfieldmodZn_prelim <- glm(lab_mean~logfield,
+                    data = labfieldsub[Elem=='Zn',],
+                    family=Gamma('log'))
+GAMrescheck(labfieldmodZn_prelim)
+Znprelimdiag <- regdiagnostic_customtab(mod=labfieldmodZn_prelim,
+                                        kCV = TRUE, 
+                                        k=10, cvreps=50,
+                                        labelvec = labfieldsub[Elem=='Zn', SiteIDPair],
+                                        remove_outliers = 'outliers')
+Znoutliers_fieldlab <- strsplit(gsub('\\\\', '', Znprelimdiag['outliers']), ',')$outliers
+
+#Check relationship again
+plot_elemvalid(dt=labfieldsub, outliers=Znoutliers_fieldlab, 
+               elem='Zn', x='field_mean', y='lab_mean',
+               color='#238b45', method='lm') +
+  scale_x_log10() + 
+  scale_y_log10()
+
+#GLM
+labfieldmodZn <- list()
+labfieldmodZn[[1]] <- glm(lab_mean~field_mean,
+                  data = labfieldsub[Elem=='Zn',], 
+                  family = Gamma('log'))
+GAMrescheck(labfieldmodZn[[1]])
+
+labfieldmodZn[[2]] <- glm(lab_mean~field_mean,
+                  data = labfieldsub[Elem=='Zn' & !(SiteIDPair %in% Znoutliers_fieldlab),], 
+                  family = gaussian('log'))
+GAMrescheck(labfieldmodZn[[2]])
+
+labfieldmodZn[[3]] <- glm(lab_mean~field_mean + drydelay,
+                  data = labfieldsub[Elem=='Zn',], 
+                  family = Gamma('log'))
+GAMrescheck(labfieldmodZn[[3]])
+
+labfieldmodZn[[4]] <- mgcv::gam(lab_mean~s(field_mean, k=3),
+                        data = labfieldsub[Elem=='Zn' & !(SiteIDPair %in% Znoutliers_fieldlab),], 
+                        family = Gamma('log'))
+GAMrescheck(labfieldmodZn[[4]])
+GAMmultiplot(labfieldmodZn[[4]])
+
+labfieldmodZn[[5]] <- lm(loglab~logfield,
+                  data = labfieldsub[Elem=='Zn' & !(SiteIDPair %in% Znoutliers_fieldlab),])
+ols_regress(labfieldmodZn[[5]])
+#ols_plot_diagnostics(labfieldmodZn[[5]])
+
+
+
+
+# ---- Relationships between field XRF and ICP OES ------
+ICPfieldsub <- ICPfieldmerge[!(Elem %in% c(excol, excol2)) & !is.na(ICP),]  %>%
+  #.[Elem=='Pb' & ICP == 0, ICP := 0.013] %>%
+  .[, `:=`(SiteIDPair = paste0(SiteID, Pair),
+           field_mean = mean)] %>%
+  .[, `:=`(logICP = log10(ICP),
+           logfield = log10(field_mean))]
+
+#Get correlation with outliers
+ICPfieldsub[, list(r_all=cor(x=field_mean, y=ICP)), by=Elem]
+
+# -------- Cu -------------
+#Check relationship
+plot_elemvalid(dt=ICPfieldsub, elem='Cu', x='field_mean', y='ICP', color='#238b45')
+
+ICPfieldmodCu_prelim <- glm(ICP~logfield,
+                    data = ICPfieldsub[Elem=='Cu',],
+                    family=Gamma('log'))
+GAMrescheck(ICPfieldmodCu_prelim)
+Cuprelimdiag <- regdiagnostic_customtab(mod=ICPfieldmodCu_prelim,
+                                        kCV = TRUE, 
+                                        k=10, cvreps=50,
+                                        labelvec = ICPfieldsub[Elem=='Cu', SiteIDPair],
+                                        remove_outliers = 'outliers')
+Cuoutliers_fieldICP <- strsplit(gsub('\\\\', '', Cuprelimdiag['outliers']), ',')$outliers
+
+#Check relationship again
+plot_elemvalid(dt=ICPfieldsub, outliers=Cuoutliers_fieldICP, 
+               elem='Cu', x='field_mean', y='ICP',
+               color='#238b45', method='lm') +
+  scale_x_log10() + 
+  scale_y_log10()
+
+#GLM
+ICPfieldmodCu <- list()
+ICPfieldmodCu[[1]] <- glm(ICP~logfield,
+                  data = ICPfieldsub[Elem=='Cu',], 
+                  family = Gamma('log'))
+GAMrescheck(ICPfieldmodCu[[1]])
+
+ICPfieldmodCu[[2]] <- glm(ICP~logfield,
+                  data = ICPfieldsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_fieldICP),], 
+                  family = Gamma('log'))
+GAMrescheck(ICPfieldmodCu[[2]])
+
+ICPfieldmodCu[[3]] <- mgcv::gam(ICP~s(field_mean, k=3),
+                        data = ICPfieldsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_fieldICP),], 
+                        family = Gamma('log'))
+GAMrescheck(ICPfieldmodCu[[3]])
+GAMmultiplot(ICPfieldmodCu[[3]])
+
+ICPfieldmodCu[[5]] <- lm(logICP~logfield,
+                 data = ICPfieldsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_fieldICP),])
+ols_regress(ICPfieldmodCu[[5]])
+#ols_plot_diagnostics(ICPfieldmodCu[[5]])
+
+#Choose mod2
+
+plot_elemvalid(dt=ICPfieldsub, outliers=Cuoutliers_fieldICP, 
+               elem='Cu', x='field_mean', y='ICP',
+               color='Date', method='none') +
+  geom_line(data=cbind(ICPfieldsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_fieldICP),],
+                       predict(ICPfieldmodCu[[2]], type='response')), aes(y=V2)) +
+  scale_x_log10() + 
+  scale_y_log10()
+
+
+# -------- Pb -------------
+#Check relationship
+plot_elemvalid(dt=ICPfieldsub, elem='Pb', x='field_mean', y='ICP', color='#238b45')
+
+ICPfieldmodPb_prelim <- glm(ICP~logfield,
+                            data = ICPfieldsub[Elem=='Pb' & ICP > 0,],
+                            family=Gamma('log'))
+GAMrescheck(ICPfieldmodPb_prelim)
+Pbprelimdiag <- regdiagnostic_customtab(mod=ICPfieldmodPb_prelim,
+                                        kCV = TRUE, 
+                                        k=10, cvreps=50,
+                                        labelvec = ICPfieldsub[Elem=='Pb', SiteIDPair],
+                                        remove_outliers = 'outliers')
+Pboutliers_fieldICP <- strsplit(gsub('\\\\', '', Pbprelimdiag['outliers']), ',')$outliers
+
+#Check relationship again
+plot_elemvalid(dt=ICPfieldsub, outliers=Pboutliers_fieldICP, 
+               elem='Pb', x='field_mean', y='ICP',
+               color='#238b45', method='lm') +
+  scale_x_log10() + 
+  scale_y_log10()
+
+#GLM
+ICPfieldmodPb <- list()
+ICPfieldmodPb[[1]] <- glm(ICP~logfield,
+                          data = ICPfieldsub[Elem=='Pb' & ICP > 0,], 
+                          family = Gamma('log'))
+GAMrescheck(ICPfieldmodPb[[1]])
+
+ICPfieldmodPb[[2]] <- glm(ICP~logfield,
+                          data = ICPfieldsub[Elem=='Pb' & 
+                                               !(SiteIDPair %in% Pboutliers_fieldICP) &
+                                               ICP >0,], 
+                          family = Gamma('log'))
+GAMrescheck(ICPfieldmodPb[[2]])
+
+ICPfieldmodPb[[3]] <- mgcv::gam(ICP~s(field_mean, k=3),
+                                data = ICPfieldsub[Elem=='Pb' & !(SiteIDPair %in% Pboutliers_fieldICP) & ICP >0,], 
+                                family = Gamma('log'))
+GAMrescheck(ICPfieldmodPb[[3]])
+GAMmultiplot(ICPfieldmodPb[[3]])
+
+ICPfieldmodPb[[5]] <- lm(logICP~logfield,
+                         data = ICPfieldsub[Elem=='Pb' & !(SiteIDPair %in% Pboutliers_fieldICP) & ICP >0,])
+ols_regress(ICPfieldmodPb[[5]])
+
+#Choose ICPfieldmodPb[[2]]
+
+# -------- Zn -------------
+#Check relationship
+plot_elemvalid(dt=ICPfieldsub, elem='Zn', x='field_mean', y='ICP', color='#238b45')
+
+ICPfieldmodZn_prelim <- glm(ICP~logfield,
+                            data = ICPfieldsub[Elem=='Zn',],
+                            family=Gamma('log'))
+GAMrescheck(ICPfieldmodZn_prelim)
+Znprelimdiag <- regdiagnostic_customtab(mod=ICPfieldmodZn_prelim,
+                                        kCV = TRUE, 
+                                        k=10, cvreps=50,
+                                        labelvec = ICPfieldsub[Elem=='Zn', SiteIDPair],
+                                        remove_outliers = 'outliers')
+Znoutliers_fieldICP <- strsplit(gsub('\\\\', '', Znprelimdiag['outliers']), ',')$outliers 
+
+#Check relationship again
+plot_elemvalid(dt=ICPfieldsub, outliers=Znoutliers_fieldICP, 
+               elem='Zn', x='field_mean', y='ICP',
+               color='#238b45', method='lm') +
+  scale_x_log10() + 
+  scale_y_log10()
+
+#GLM
+ICPfieldmodZn <- list()
+ICPfieldmodZn[[1]] <- glm(ICP~logfield,
+                          data = ICPfieldsub[Elem=='Zn',], 
+                          family = Gamma('log'))
+GAMrescheck(ICPfieldmodZn[[1]])
+
+ICPfieldmodZn[[2]] <- glm(ICP~logfield,
+                          data = ICPfieldsub[Elem=='Zn' & !(SiteIDPair %in% Znoutliers_fieldICP),], 
+                          family = Gamma('log'))
+GAMrescheck(ICPfieldmodZn[[2]])
+
+ICPfieldmodZn[[3]] <- mgcv::gam(ICP~s(field_mean, k=3),
+                                data = ICPfieldsub[Elem=='Zn' & !(SiteIDPair %in% Znoutliers_fieldICP),], 
+                                family = Gamma('log'))
+GAMrescheck(ICPfieldmodZn[[3]])
+GAMmultiplot(ICPfieldmodZn[[3]])
+
+ICPfieldmodZn[[5]] <- lm(logICP~logfield,
+                         data = ICPfieldsub[Elem=='Zn' & !(SiteIDPair %in% Znoutliers_fieldICP),])
+ols_regress(ICPfieldmodZn[[5]])
+
+#Choose ICPfieldmodZn[[2]]
+
+
+
+# ---- Relationships between lab XRF and ICP OES ------
+ICPlabsub <- ICPlabmerge[!(Elem %in% c(excol, excol2)) & !is.na(ICP),]  %>%
+  #.[Elem=='Pb' & ICP == 0, ICP := 0.013] %>%
+  .[, `:=`(SiteIDPair = paste0(SiteID, Pair),
+           lab_mean = mean)] %>%
+  .[, `:=`(logICP = log10(ICP),
+           loglab = log10(lab_mean))]
+
+#Get correlation with outliers
+ICPlabsub[, list(r_all=cor(x=lab_mean, y=ICP)), by=Elem]
+
+# -------- Cu -------------
+#Check relationship
+plot_elemvalid(dt=ICPlabsub, elem='Cu', x='lab_mean', y='ICP', color='#d94801')
+
+ICPlabmodCu_prelim <- glm(ICP~loglab,
+                            data = ICPlabsub[Elem=='Cu',],
+                            family=Gamma('log'))
+GAMrescheck(ICPlabmodCu_prelim)
+Cuprelimdiag <- regdiagnostic_customtab(mod=ICPlabmodCu_prelim,
+                                        kCV = TRUE, 
+                                        k=5, cvreps=50,
+                                        labelvec = ICPlabsub[Elem=='Cu', SiteIDPair],
+                                        remove_outliers = 'outliers & leverage')
+Cuoutliers_ICPlab <- strsplit(gsub('\\\\', '', Cuprelimdiag['outliers']), ',')$outliers
+
+#Check relationship again
+plot_elemvalid(dt=ICPlabsub, outliers=Cuoutliers_ICPlab, 
+               elem='Cu', x='lab_mean', y='ICP',
+               color='#d94801', method='gam') +
+  scale_x_log10() + 
+  scale_y_log10()
+
+#GLM
+ICPlabmodCu <- list()
+ICPlabmodCu[[1]] <- glm(ICP~lab_mean,
+                          data = ICPlabsub[Elem=='Cu',], 
+                          family = Gamma('log'))
+GAMrescheck(ICPlabmodCu[[1]])
+
+ICPlabmodCu[[2]] <- glm(ICP~loglab + I(loglab^2),
+                          data = ICPlabsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_ICPlab),], 
+                          family = Gamma('log'))
+GAMrescheck(ICPlabmodCu[[2]])
+
+glm(ICP~poly(loglab, 2),
+    data = ICPlabsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_ICPlab),], 
+    family = Gamma('log'))
+
+ICPlabmodCu[[3]] <- mgcv::gam(ICP~s(loglab, k=2),
+                                data = ICPlabsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_ICPlab),], 
+                                family = Gamma('log'))
+GAMrescheck(ICPlabmodCu[[3]])
+GAMmultiplot(ICPlabmodCu[[3]])
+
+ICPlabmodCu[[5]] <- lm(logICP~loglab,
+                         data = ICPlabsub[Elem=='Cu' & !(SiteIDPair %in% Cuoutliers_ICPlab),])
+ols_regress(ICPlabmodCu[[5]])
+#ols_plot_diagnostics(ICPlabmodCu[[5]])
+
+#Choose mod2
+
+plot_elemvalid(dt=ICPlabsub, outliers=Cuoutliers_ICPlab, 
+               elem='Cu', x='lab_mean', y='ICP',
+               color='#d94801', method='none') +
+  geom_line(data=cbind(ICPlabsub[Elem=='Cu',],
+                       predict(ICPlabmodCu[[2]], type='response')), aes(y=V2)) +
+  scale_x_log10() + 
+  scale_y_log10()
+
+
+# -------- Pb -------------
+#Check relationship
+plot_elemvalid(dt=ICPlabsub, elem='Pb', x='lab_mean', y='ICP', color='#d94801')
+
+ICPlabmodPb_prelim <- glm(ICP~loglab,
+                            data = ICPlabsub[Elem=='Pb' & ICP > 0,],
+                            family=gaussian('log'))
+GAMrescheck(ICPlabmodPb_prelim)
+Pbprelimdiag <- regdiagnostic_customtab(mod=ICPlabmodPb_prelim,
+                                        kCV = TRUE, 
+                                        k=5, cvreps=50,
+                                        labelvec = ICPlabsub[Elem=='Pb', SiteIDPair],
+                                        remove_outliers = 'outliers & leverage')
+Pboutliers_ICPlab <- strsplit(gsub('\\\\', '', Pbprelimdiag['outliers']), ',')$outliers 
+
+#Check relationship again
+plot_elemvalid(dt=ICPlabsub, outliers=Pboutliers_ICPlab, 
+               elem='Pb', x='lab_mean', y='ICP',
+               color='#d94801', method='lm') +
+  scale_x_log10() + 
+  scale_y_log10()
+
+#GLM
+ICPlabmodPb <- list()
+ICPlabmodPb[[2]] <- glm(ICP~loglab,
+                          data = ICPlabsub[Elem=='Pb' & ICP >0,], 
+                          family = gaussian('log'))
+GAMrescheck(ICPlabmodPb[[2]])
+
+ICPlabmodPb[[3]] <- mgcv::gam(ICP~s(lab_mean, k=3),
+                                data = ICPlabsub[Elem=='Pb' &
+                                                   !(SiteIDPair %in% Pboutliers_ICPlab) &
+                                                   ICP >0,], 
+                                family = Gamma('log'))
+GAMrescheck(ICPlabmodPb[[3]])
+GAMmultiplot(ICPlabmodPb[[3]])
+
+ICPlabmodPb[[5]] <- lm(logICP~loglab,
+                         data = ICPlabsub[Elem=='Pb' & !(SiteIDPair %in% Pboutliers_ICPlab) & ICP >0,])
+ols_regress(ICPlabmodPb[[5]])
+
+#Choose ICPlabmodPb[[2]]
+
+# -------- Zn -------------
+#Check relationship
+plot_elemvalid(dt=ICPlabsub, elem='Zn', x='lab_mean', y='ICP', color='#d94801')
+
+ICPlabmodZn_prelim <- glm(ICP~loglab,
+                            data = ICPlabsub[Elem=='Zn',],
+                            family=Gamma('log'))
+GAMrescheck(ICPlabmodZn_prelim)
+Znprelimdiag <- regdiagnostic_customtab(mod=ICPlabmodZn_prelim,
+                                        kCV = TRUE, 
+                                        k=5, cvreps=50,
+                                        labelvec = ICPlabsub[Elem=='Zn', SiteIDPair],
+                                        remove_outliers = 'outliers & leverage')
+Znoutliers_ICPlab <- strsplit(gsub('\\\\', '', Znprelimdiag['outliers']), ',')$outliers 
+
+#Check relationship again
+plot_elemvalid(dt=ICPlabsub, outliers=Znoutliers_ICPlab, 
+               elem='Zn', x='lab_mean', y='ICP',
+               color='#d94801', method='lm') +
+  scale_x_log10() + 
+  scale_y_log10()
+
+#GLM
+ICPlabmodZn <- list()
+ICPlabmodZn[[2]] <- glm(ICP~loglab,
+                          data = ICPlabsub[Elem=='Zn',], 
+                          family = Gamma('log'))
+GAMrescheck(ICPlabmodZn[[2]])
+
+ICPlabmodZn[[3]] <- mgcv::gam(ICP~s(lab_mean, k=3),
+                                data = ICPlabsub[Elem=='Zn' & !(SiteIDPair %in% Znoutliers_ICPlab),], 
+                                family = Gamma('log'))
+GAMrescheck(ICPlabmodZn[[3]])
+GAMmultiplot(ICPlabmodZn[[3]])
+
+ICPlabmodZn[[5]] <- lm(logICP~loglab,
+                         data = ICPlabsub[Elem=='Zn' & !(SiteIDPair %in% Znoutliers_ICPlab),])
+ols_regress(ICPlabmodZn[[5]])
+
+#Choose ICPlabmodZn[[2]]
+
+# ---- Compilation of models --------------------------------------------------
+#--------- Make table ---------------
+final_modlist <- list(
+  ICPfieldmodCu[[1]],
+  ICPfieldmodCu[[2]],
+  ICPfieldmodPb[[1]],
+  ICPfieldmodPb[[2]],
+  ICPfieldmodZn[[1]],
+  ICPfieldmodZn[[2]],
+  ICPlabmodCu[[2]],
+  ICPlabmodPb[[2]],
+  ICPlabmodZn[[2]]
+)
+
+lapply(final_modlist, function(mod) GAMrescheck(mod))
+
+final_modsummary <- as.data.table(ldply(final_modlist, function(mod) {
+  regdiagnostic_customtab(mod=mod, kCV = TRUE, k=10, cvreps=50)
+}))
+final_modsummary[, `:=`(Elem=c(rep(c('Cu', 'Pb', 'Zn'), each=2), c('Cu', 'Pb', 'Zn')),
+                       type = c(rep(c('With outliers', 'Without outliers'), each=3),
+                                rep('With outliers', 3)),
+                       method = c(rep('in situ XRF - ICP', 6), 
+                                  rep('lab. XRF - ICP', 3)),
+                       N =  unlist(lapply(final_modlist, function(mod) nrow(mod$data)))
+                       )]
+cat(latex_format(final_modsummary),
+    file = file.path(moddir, 'modeltable_XRFvalidation_20201029.tex'))
+
+
+#--------- Make scatterplots ---------------
+plot_modelpreds <- function(mod, pred, elem, dt, stdbreaks, outliers=NULL,
+                            point.color = '#238443', bottom.row=TRUE, 
+                            ylims) {
+  p <- jtools::effect_plot(mod, pred = !!pred,
+                           interval = TRUE, plot.points = TRUE, 
+                           point.size=3, point.alpha=1/2, point.color=point.color) + 
+    scale_x_continuous(breaks=log10(stdbreaks),
+                       labels=stdbreaks) + 
+    scale_y_log10(name = 'Concentration (ppm) | ICP-OES', limits=ylims) + 
+    labs(title=elem) +
+    theme_bw() + 
+    theme(text=element_text(size=14))
+    
+  if (!bottom.row) {
+    p <- p + 
+      theme(axis.title.x = element_blank())
+  }
+  
+  if(!is.null(outliers)) {
+    p <- p + geom_point(data=dt[
+      (SiteIDPair %in% outliers) &  Elem == elem,],
+      aes(x=get(pred), y=ICP), color='black', size=3, alpha=1/2)
+  }
+  
+  return(p)
+}
+
+pCu_1 <- plot_modelpreds(
+  mod = ICPfieldmodCu[[2]],
+  pred = 'logfield',
+  dt = ICPfieldsub,
+  stdbreaks = c(0.05, 0.1, 0.25, 0.5),
+  ylims = c(3, 175),
+  outliers = Cuoutliers_fieldICP,
+  elem = 'Cu',
+  bottom.row = FALSE) +
+  theme(axis.title.y = element_blank())
+
+pPb_1 <- plot_modelpreds(
+  mod = ICPfieldmodPb[[2]],
+  pred = 'logfield',
+  dt = ICPfieldsub,
+  stdbreaks = c(0.01, 0.05, 0.1, 0.25, 0.5),
+  outliers = c(Pboutliers_fieldICP, 
+               ICPfieldsub[ICP==0 & Elem=='Pb', SiteIDPair]),
+  ylims = c(1, 100),
+  elem = 'Pb',
+  bottom.row = FALSE)
+
+pZn_1 <- plot_modelpreds(
+  mod = ICPfieldmodZn[[2]],
+  pred = 'logfield',
+  dt = ICPfieldsub,
+  stdbreaks = c(0.1, 0.25, 0.5, 1),
+  outliers = Znoutliers_fieldICP,
+  ylims = c(10, 350),
+  elem = 'Zn',
+  bottom.row = TRUE)+
+  xlab('Normalized count | in-situ XRF') +
+  theme(axis.title.y = element_blank(),
+        plot.background = element_blank())
+
+pCu_2 <- plot_modelpreds(
+  mod = ICPlabmodCu[[2]],
+  pred = 'loglab',
+  dt = ICPlabsub,
+  stdbreaks = c(0.05, 0.1, 0.25, 0.5, 1),
+  ylims = c(3, 175),
+  elem = 'Cu', 
+  point.color = '#225ea8',
+  bottom.row = FALSE)+
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        title = element_blank())
+
+pPb_2 <- plot_modelpreds(
+  mod = ICPlabmodPb[[2]],
+  pred = 'loglab',
+  dt = ICPlabsub,
+  stdbreaks = c(0.01, 0.05, 0.1, 0.25, 0.5, 1),
+  elem = 'Pb',
+  ylims = c(1, 100),
+  outliers = ICPlabsub[ICP==0 & Elem=='Pb', SiteIDPair],
+  point.color = '#225ea8',
+  bottom.row = FALSE)+
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        title = element_blank())
+
+pZn_2 <- plot_modelpreds(
+  mod = ICPlabmodZn[[2]],
+  pred = 'loglab',
+  dt = ICPlabsub,
+  stdbreaks = c(0.025, 0.05, 0.1, 0.25, 0.5, 1),
+  ylims = c(10, 350),
+  elem = 'Zn',
+  point.color = '#225ea8',
+  bottom.row = TRUE)+
+  xlab('Normalized count | lab. XRF') +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        plot.title = element_blank(),
+        plot.background = element_blank())
+
+png(file.path(moddir, 
+              paste0('XRFvalidation_20201029.png')), 
+    width = 6, height=9, units='in', res=600)
+(pCu_1 | pCu_2) /
+(pPb_1 | pPb_2) /
+(pZn_1 | pZn_2)
+dev.off()

@@ -335,11 +335,22 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
     outlierlist <- NULL
   }
   
+  customSummary <- function (data, lev = NULL, model = NULL) {
+    if (is.character(data$obs)) 
+      data$obs <- factor(data$obs, levels = lev)
+    c(
+      postResample(data[, "pred"], data[, "obs"]),
+      sMAPE = Metrics::smape(data[, "obs"], data[,"pred"])
+    )
+
+  }
+  
   if (kCV) {
     if (length(mod$coefficients) > 1) {
       ctrl <- trainControl(method = "repeatedcv",
                            number = k,
-                           repeats = cvreps)
+                           repeats = cvreps,
+                           summaryFunction = customSummary)
       
       modcv <- train(form = as.formula(formcall), 
                      data = mod$model,
@@ -351,10 +362,10 @@ regdiagnostic_customtab <- function(mod, maxpar = 20, remove_outliers = 'none', 
         paste0(round(mean(x),2), '\\big(', 
                round(quantile(x, .20),2), '\\textendash', 
                round(quantile(x, .80), 2), '\\big)')}),
-        .SDcols= c('Rsquared', 'RMSE', 'MAE')]
-      names(kCVresults) <- c('R2cv', 'RMSEcv', 'MAEcv')
+        .SDcols= c('Rsquared', 'RMSE', 'MAE', 'sMAPE')]
+      names(kCVresults) <- c('R2cv', 'RMSEcv', 'MAEcv', 'sMAPEcv')
     } else {
-      kCVresults <- c('R2cv'= '', 'RMSEcv'= '', 'MAEcv'= '')
+      kCVresults <- c('R2cv'= '', 'RMSEcv'= '', 'MAEcv'= '', 'sMAPEcv'='')
     }
   } else {
     kCVresults <- NULL
