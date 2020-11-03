@@ -1748,8 +1748,6 @@ bubble(bubbledat_postsarlm, "resnorm_postsarlm", col = c("blue","red"),
 ### FINAL VERDICT: GO WITH MOD 19 TRAINED WITHOUT OUTLIERS-----
 
 #--------------- C. Synthetic pollution index (PI) ~ separate predictors ----
-subdatPI <- pollutfieldclean_cast[!(SiteIDPair %in% extraoutliers | SiteIDPair == '107A'),]
-
 #------ 1. PI - Single parameter models --------
 modlistPI <- list() #List to hold models
 modlistPI[[1]] <- lm(pollution_index ~ 1, data = pollutfieldclean_cast) #Null/Intercept model
@@ -2534,7 +2532,7 @@ write.csv(pollutfieldclean_cast,
 #Generate table of statistics
 tablecols <- c('#', 'Pair','Br','Cd', 'Co', 'Cr', 'Cu', 'Fe', 'Mn', 'Ni', 'Pb', 'Se', 'Sr', 'Ti',
                'Zn', 'Zr', "pollution_index", "nlcd_imp_ps", "LU", "POINT_X", "POINT_Y")
-digitvec <- c(0,0,2,3,2,3,2,1,2,3,2,3,2,2,2,2,0,0,0,4,4)
+digitvec <- c(0,0,2,3,2,3,2,1,2,3,2,3,2,2,2,2,1,0,0,4,4)
 LUcodes <- data.table(code = as.character(c(21, 41, 43, 81, 95, 96, 97, 98, 99)), 
                       LU = c("devlpd open", "decid. forest", "mixed forest", 
                              "pasture", "wetlands", "road", "resid.", "commer.", "indus."))
@@ -2565,7 +2563,7 @@ rbind(tablestats, pollutable[order(-pollut.i),])[, colnames(pollutable), with=F]
   kable(format = "html", escape = F, 
         digits = digitvec) %>%
   kable_styling("striped", full_width = F) %>%
-  save_kable(file.path(resdir, 'XRFrestab_20181219.doc'), self_contained=T)
+  save_kable(file.path(resdir, 'XRFrestab_20201102.doc'), self_contained=T)
 
 
 #--------------- D. Make scatterplot of three final results -----
@@ -2586,6 +2584,7 @@ MAE_Znstand <- pollutfieldclean_cast[, DescTools::MAE(Znstand,predZn_sarlm)]
 MAPE_Znstand <- pollutfieldclean_cast[, DescTools::MAPE(Znstand,predZn_sarlm)]
 MAE_Custand <- pollutfieldclean_cast[, DescTools::MAE(Custand,predCu_sarlm)]
 MAPE_Custand <- pollutfieldclean_cast[, DescTools::MAPE(Custand,predCu_sarlm)]
+
 MAE_PI <- pollutfieldclean_cast[, DescTools::MAE(pollution_index, predPI_sarlm)]
 MAPE_PI <- pollutfieldclean_cast[, DescTools::MAPE(pollution_index, predPI_sarlm)]
 
@@ -2596,8 +2595,8 @@ eqCu <-paste0("Cu = ", format(unname(sarlm_modCustand$coefficients[1]), digits =
               format(unname(sarlm_modCustand$coefficients[2]), digits = 3), " . bus transitlog2001/2 + ",
               format(unname(sarlm_modCustand$coefficients[3]), digits = 3), " . imperviousness)")
 eqPI <-paste0("PI = ", format(unname(sarlm_modPI$coefficients[1]), digits = 3), " + ",
-              format(unname(sarlm_modPI$coefficients[2]), digits = 3), " . traffic volumelog1001/3 + ",
-              format(unname(sarlm_modPI$coefficients[3]), digits = 3), " . bus transitlinear100 + ",
+              format(unname(sarlm_modPI$coefficients[2]), digits = 3), " . traffic volumelog100 + ",
+              format(unname(sarlm_modPI$coefficients[3]), digits = 3), " . bus transitlinear1001/3 + ",
               format(unname(sarlm_modPI$coefficients[4]), digits = 3), " . imperviousness")
 
 marginp <- 0.3
@@ -2616,10 +2615,10 @@ gplotZn <- ggplot(pollutfieldclean_cast, aes(x=predZn_sarlm,
         text = element_text(size=12),
         plot.title = element_text(size=10))
 
-gplotCu <- ggplot(pollutfieldclean_cast[SiteIDPair %in% subdat$SiteIDPair,], 
+gplotCu <- ggplot(pollutfieldclean_cast[SiteIDPair %in% Cusubdat$SiteIDPair,], 
                   aes(x=predCu_sarlm, y=Custand)) +
   geom_point(alpha=1/2, size=2, color = '#8c510a') + 
-  geom_point(data=pollutfieldclean_cast[!(SiteIDPair %in% subdat$SiteIDPair),], color='#525252', size=2, alpha=0.75) + 
+  geom_point(data=pollutfieldclean_cast[!(SiteIDPair %in% Cusubdat$SiteIDPair),], color='#525252', size=2, alpha=0.75) + 
   geom_abline(intercept=0, slope=1) +
   scale_y_continuous(limits=c(0,100), expand=c(0,0), name = 'Observed Cu') + 
   scale_x_continuous(limits=c(0,100), expand=c(0,0), name = 'Predicted Cu') + 
@@ -2635,12 +2634,13 @@ gplotCu <- ggplot(pollutfieldclean_cast[SiteIDPair %in% subdat$SiteIDPair,],
 gplotPI<- ggplot(pollutfieldclean_cast[SiteIDPair %in% subdatPI$SiteIDPair,], 
                  aes(x=predPI_sarlm, y=pollution_index)) +
   geom_point(alpha=1/2, size=2, color = '#762a83') +  
-  geom_point(data=pollutfieldclean_cast[!(SiteIDPair %in% subdatPI$SiteIDPair),], color='#525252', size=2, alpha=0.75) + 
+  geom_point(data=pollutfieldclean_cast[!(SiteIDPair %in% subdatPI$SiteIDPair),],
+             color='#525252', size=2, alpha=0.75) + 
   geom_abline(intercept=0, slope=1) +
-  scale_y_continuous(limits=c(0,75), expand=c(0,0), name = 'Observed pollution index') + 
-  scale_x_continuous(limits=c(0,75), expand=c(0,0), name = 'Predicted pollution index') + 
+  scale_y_continuous(limits=c(0,20), expand=c(0,0), name = 'Observed pollution index') + 
+  scale_x_continuous(limits=c(0,20), expand=c(0,0), name = 'Predicted pollution index') + 
   annotate(geom='text', label=paste0('MAE: ', round(MAE_PI, 1), 
-                                     '\n MAPE: ', round(100*MAPE_PI, 0), '%'), x=60, y=10) + 
+                                     '\n MAPE: ', round(100*MAPE_PI, 0), '%'), x=18, y=3) + 
   ggtitle(eqPI) + 
   coord_fixed() +
   theme_classic() + 
@@ -2656,7 +2656,7 @@ gg_tableCu$layout$clip[gg_tableCu$layout$name=="panel"] <- "off"
 gg_tablePI <- ggplot_gtable(ggplot_build(gplotPI))
 gg_tablePI$layout$clip[gg_tablePI$layout$name=="panel"] <- "off"
 
-pdf(file.path(moddir, 'scatterplots_ZnCuPI_20191220.pdf'), width=4, height=4)
+pdf(file.path(moddir, 'scatterplots_ZnCuPI_20201102.pdf'), width=4, height=4)
 grid.draw(cbind(arrangeGrob(gg_tableZn, gg_tablePI), arrangeGrob(gg_tableCu, rectGrob(gp=gpar(col=NA)))))
 dev.off()
 
