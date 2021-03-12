@@ -2693,19 +2693,22 @@ pZn_2 <- plot_modelpreds(
   mod = ICPlabmodZn[[2]],
   pred = 'loglab',
   dt = ICPlabsub,
-  stdbreaks = c(0.025, 0.05, 0.1, 0.25, 0.5, 1),
+  stdbreaks = c(0.025, 0.01, 0.05, 0.15, 0.25, 0.5, 1),
   ylims = c(10, 350),
   elem = 'Zn',
   point.color = '#225ea8',
   bottom.row = TRUE)+
   xlab('Normalized count | lab. XRF') +
+  scale_x_continuous(limits=log10(c(0.1, 2)),
+                     breaks = log10(c(0.1, 0.25, 0.5, 1, 2)),
+                     labels=c(0.1, 0.25, 0.5, 1, 2)) +
   theme(axis.title.y = element_blank(),
         axis.text.y = element_blank(),
         plot.title = element_blank(),
         plot.background = element_blank())
 
 png(file.path(moddir, 
-              paste0('XRFvalidation_20201029.png')), 
+              paste0('XRFvalidation_20210311.png')), 
     width = 6, height=9, units='in', res=600)
 (pCu_1 | pCu_2) /
 (pPb_1 | pPb_2) /
